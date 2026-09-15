@@ -16,13 +16,22 @@ jobs:
 
       - name: Extract PRO v3
         run: |
-          unzip -o KuCoinSignalApp_PRO_v3.zip
+          mkdir -p /tmp/pro
+          unzip -o KuCoinSignalApp_PRO_v3.zip -d /tmp/pro
+
+          cp -R /tmp/pro/app .
+          cp /tmp/pro/build.gradle .
+          cp /tmp/pro/settings.gradle .
+          cp /tmp/pro/gradle.properties .
+          cp /tmp/pro/README.md . || true
+
           rm KuCoinSignalApp_PRO_v3.zip
 
       - name: Commit project
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+
+          git add app build.gradle settings.gradle gradle.properties README.md
           git commit -m "Install KuCoinSignalApp PRO v3" || echo "Nothing to commit"
           git push
