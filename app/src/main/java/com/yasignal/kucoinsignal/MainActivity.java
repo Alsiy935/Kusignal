@@ -28,7 +28,7 @@ public class MainActivity extends Activity {
     private void build(){
         ScrollView scroll=new ScrollView(this);
         root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(24,44,24,24); root.setBackgroundColor(Color.rgb(16,17,20));
-        TextView title=tv("Сигнал фьючерсов PRO v6",27); title.setTypeface(Typeface.DEFAULT,Typeface.BOLD); root.addView(title);
+        TextView title=tv("Сигнал фьючерсов PRO v6.1",27); title.setTypeface(Typeface.DEFAULT,Typeface.BOLD); root.addView(title);
         root.addView(tv("Многоуровневая проверка • 1D + 4H + 1H + 15M + 5M • цена + объём + OI + стакан",13));
         symbol=new EditText(this); symbol.setText("XBTUSDTM"); symbol.setHint("Символ фьючерса"); symbol.setTextColor(Color.WHITE); symbol.setHintTextColor(Color.GRAY); root.addView(symbol);
         scan=new Button(this); scan.setText("АНАЛИЗ"); root.addView(scan);
@@ -57,19 +57,35 @@ public class MainActivity extends Activity {
     }
 
     private ArrayList<C> getCandles(String s,String interval,int sec)throws Exception{
-        String u=API+"kline?symbol="+URLEncoder.encode(s,"UTF-8")+"&tradeType=FUTURES&klineType=TRADE&interval="+interval;
-        JSONObject j=getJson(u); JSONArray list=j.optJSONArray("data");
-        if(list==null||list.length()<80) throw new Exception("Недостаточно свечей: "+interval);
-        ArrayList<C> out=new ArrayList<>();
-        for(int i=0;i<list.length();i++){
-            JSONArray q=list.getJSONArray(i); if(q.length()<6) continue;
-            out.add(new C(q.getLong(0),q.getDouble(1),q.getDouble(2),q.getDouble(3),q.getDouble(4),q.getDouble(5)));
-        }
-        Collections.sort(out,Comparator.comparingLong(a->a.t));
+        // KuCoin Futures REST returns at most 200 candles per request.
+        // Request a full 200-candle time window instead of relying on the API default range.
         long now=System.currentTimeMillis()/1000;
-        if(out.size()>2 && now-out.get(out.size()-1).t<sec) out.remove(out.size()-1);
-        if(out.size()<80) throw new Exception("Недостаточно закрытых свечей: "+interval);
-        return out;
+        ArrayList<C> out=new ArrayList<>();
+        Exception last=null;
+        long[] windows={200L,400L,800L};
+        for(long count:windows){
+            try{
+                long end=now;
+                long start=now-count*sec;
+                String base=API+"kline?symbol="+URLEncoder.encode(s,"UTF-8")+"&tradeType=FUTURES&klineType=TRADE&interval="+interval;
+                String u=base+"&startAt="+start+"&endAt="+end;
+                JSONObject j=getJson(u); JSONArray list=j.optJSONArray("data");
+                if(list==null) continue;
+                for(int i=0;i<list.length();i++){
+                    JSONArray q=list.getJSONArray(i); if(q.length()<6) continue;
+                    out.add(new C(q.getLong(0),q.getDouble(1),q.getDouble(2),q.getDouble(3),q.getDouble(4),q.getDouble(5)));
+                }
+                Collections.sort(out,Comparator.comparingLong(a->a.t));
+                ArrayList<C> unique=new ArrayList<>(); long lastTs=Long.MIN_VALUE;
+                for(C c:out){ if(c.t!=lastTs){ unique.add(c); lastTs=c.t; } }
+                out=unique;
+                if(out.size()>2 && now-out.get(out.size()-1).t<sec) out.remove(out.size()-1);
+                if(out.size()>=80) return out;
+            }catch(Exception e){ last=e; }
+            out.clear();
+            try{Thread.sleep(350);}catch(InterruptedException ignored){}
+        }
+        throw new Exception("Недостаточно закрытых свечей: "+interval+" (KuCoin вернул мало данных; повторите анализ через несколько секунд)"+(last==null?"":" — "+last.getMessage()));
     }
 
     private MarketExtras getExtras(String s)throws Exception{
