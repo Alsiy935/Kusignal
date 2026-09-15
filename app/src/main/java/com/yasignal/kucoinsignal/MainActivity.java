@@ -28,12 +28,12 @@ public class MainActivity extends Activity {
     private void build(){
         ScrollView scroll=new ScrollView(this);
         root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(24,24,24,24); root.setBackgroundColor(Color.rgb(16,17,20));
-        TextView title=tv("Сигнал фьючерсов PRO",28); title.setTypeface(Typeface.DEFAULT,Typeface.BOLD); root.addView(title);
+        TextView title=tv("Сигнал фьючерсов PRO v5",28); title.setTypeface(Typeface.DEFAULT,Typeface.BOLD); root.addView(title);
         root.addView(tv("KuCoin Futures • тренд + импульс + структура + объём + стакан + OI/фандинг",13));
         symbol=new EditText(this); symbol.setText("XBTUSDTM"); symbol.setHint("Символ фьючерса"); symbol.setTextColor(Color.WHITE); symbol.setHintTextColor(Color.GRAY); root.addView(symbol);
         scan=new Button(this); scan.setText("АНАЛИЗ"); root.addView(scan);
         signal=tv("ОЖИДАНИЕ",32); signal.setGravity(Gravity.CENTER); signal.setTypeface(Typeface.DEFAULT,Typeface.BOLD); root.addView(signal,new LinearLayout.LayoutParams(-1,110));
-        details=tv("Entry —\nSL —\nTP1 —\nTP2 —\nTP3 —",17); details.setBackgroundResource(com.yasignal.kucoinsignal.R.drawable.bg); root.addView(details);
+        details=tv("Вход —\nСтоп-лосс —\nТейк-профит 1 —\nТейк-профит 2 —\nТейк-профит 3 —",17); details.setBackgroundResource(com.yasignal.kucoinsignal.R.drawable.bg); root.addView(details);
         status=tv("Готово",13); root.addView(status);
         scan.setOnClickListener(v->runScan());
         scroll.addView(root); setContentView(scroll);
@@ -184,7 +184,7 @@ public class MainActivity extends Activity {
         }
         if(!Double.isNaN(ex.funding)){if(ex.funding>0.0015)S+=3;else if(ex.funding<-0.0015)L+=3;}
         int max=Math.max(L,S),min=Math.min(L,S),score=clamp((int)Math.round(max*100.0/120.0));
-        boolean trendAligned=(b4.l>=8&&b1.l>=8)||(b4.s>=8&&b1.s>=8), strong=max-min>=10; String dir="ОЖИДАНИЕ";
+        boolean trendAligned=(b4.l>=8&&b1.l>=8)||(b4.s>=8&&b1.s>=8), strong=max-min>=10; String dir="WAIT";
         if(score>=65&&strong&&trendAligned)dir=L>S?"LONG":"SHORT";
         double atr=Math.max(b5.a,b15.a*0.7),entry=price,sl,tp1,tp2,tp3,swingL=lowest(c15,20),swingH=highest(c15,20);
         if(dir.equals("LONG")){sl=Math.min(swingL,entry-1.4*atr);if(sl>=entry)sl=entry-1.5*atr;double risk=entry-sl;tp1=entry+1.2*risk;tp2=entry+2*risk;tp3=entry+3*risk;}
@@ -193,29 +193,48 @@ public class MainActivity extends Activity {
         return new Result(dir,score,L,S,entry,sl,tp1,tp2,tp3,b5,b15,b1,b4,vr,imb,ex.funding,oiDelta);
     }
 
+    private String priceFmt(double v){
+        if(Double.isNaN(v)) return "—";
+        if(Math.abs(v)>=1000) return String.format(Locale.US,"%.1f",v);
+        if(Math.abs(v)>=1) return String.format(Locale.US,"%.2f",v);
+        return String.format(Locale.US,"%.6f",v);
+    }
+
     private void show(Result r){
         String candidate = r.l > r.s ? "LONG" : r.s > r.l ? "SHORT" : "НЕЙТРАЛЬНО";
         boolean longAlign = r.b4.l >= 8 && r.b1.l >= 8;
         boolean shortAlign = r.b4.s >= 8 && r.b1.s >= 8;
         boolean aligned = longAlign || shortAlign;
-        signal.setText(r.d.equals("WAIT") ? "ОЖИДАНИЕ  •  " + candidate + "  " + r.score + "/100" : r.d+"  "+r.score+"/100");
+        boolean strong = Math.abs(r.l-r.s) >= 10;
+        boolean ready = !r.d.equals("WAIT");
+
+        if(ready){
+            signal.setText(r.d+"  "+r.score+"/100");
+        } else {
+            signal.setText("ОЖИДАНИЕ  •  "+candidate+"  "+r.score+"/100");
+        }
 
         StringBuilder e=new StringBuilder();
-        if(r.d.equals("WAIT")){
+        if(!ready){
             e.append("ВХОДА НЕТ — ОЖИДАНИЕ\n\n");
             e.append("Направление: ").append(candidate).append("\n");
             e.append("Сила сигнала: ").append(r.score).append("/100\n\n");
             e.append("ВХОД ЗАБЛОКИРОВАН: ");
-            if(!aligned) e.append("СОГЛАСОВАННОСТЬ ТРЕНДА 4Ч/1Ч");
-            else e.append("условия входа");
+            if(!aligned) e.append("4Ч/1Ч НЕ СОГЛАСОВАНЫ");
+            else if(!strong) e.append("СЛИШКОМ МАЛАЯ РАЗНИЦА LONG/SHORT");
+            else e.append("ДОПОЛНИТЕЛЬНЫЕ ФИЛЬТРЫ");
             e.append("\n\n");
         } else {
-            e.append(String.format(Locale.US,"Вход: %.8f\nСтоп-лосс: %.8f\nТейк-профит 1: %.8f\nТейк-профит 2: %.8f\nТейк-профит 3: %.8f\n\n",r.p,r.sl,r.tp1,r.tp2,r.tp3));
+            e.append("Вход: ").append(priceFmt(r.p)).append("\n");
+            e.append("Стоп-лосс: ").append(priceFmt(r.sl)).append("\n");
+            e.append("Тейк-профит 1: ").append(priceFmt(r.tp1)).append("\n");
+            e.append("Тейк-профит 2: ").append(priceFmt(r.tp2)).append("\n");
+            e.append("Тейк-профит 3: ").append(priceFmt(r.tp3)).append("\n\n");
         }
 
         String oi=Double.isNaN(r.oiDelta)?"N/A":String.format(Locale.US,"%+.2f%%",r.oiDelta*100);
-        String align4=longAlign?"LONG ✓":(r.b4.l>=8||r.b4.s>=8)?"SHORT/ДРУГОЕ":"ЗАБЛОКИРОВАНО ✗";
-        String align1=shortAlign?"SHORT ✓":longAlign?"LONG ✓":(r.b1.l>=8||r.b1.s>=8)?"ДРУГОЕ":"ЗАБЛОКИРОВАНО ✗";
+        String align4 = r.b4.l>=8 && r.b4.l>=r.b4.s ? "LONG ✓" : r.b4.s>=8 && r.b4.s>r.b4.l ? "SHORT ✓" : "ДРУГОЕ";
+        String align1 = r.b1.l>=8 && r.b1.l>=r.b1.s ? "LONG ✓" : r.b1.s>=8 && r.b1.s>r.b1.l ? "SHORT ✓" : "ДРУГОЕ";
         details.setText(e.toString()+String.format(Locale.US,
                 "LONG: %d   SHORT: %d\n" +
                 "Согласованность 4Ч: %s  (L%d / S%d)\n" +
@@ -229,7 +248,7 @@ public class MainActivity extends Activity {
                 r.l,r.s,align4,r.b4.l,r.b4.s,align1,r.b1.l,r.b1.s,
                 r.b5.rsi,r.b15.rsi,r.b1.rsi,r.b4.rsi,r.vr,r.imb,oi,
                 Double.isNaN(r.funding)?"N/A":String.format(Locale.US,"%.5f%%",r.funding*100)));
-        status.setText("Обновлено: "+new Date()+" • только закрытые свечи • требуется согласование тренда 4Ч+1Ч");
+        status.setText("Обновлено: "+new Date()+" • только закрытые свечи • вход только при согласовании тренда 4Ч+1Ч");
     }
 
     static class C{long t;double o,h,l,cl,vol;C(long t,double o,double h,double l,double c,double v){this.t=t;this.o=o;this.h=h;this.l=l;cl=c;vol=v;}}
