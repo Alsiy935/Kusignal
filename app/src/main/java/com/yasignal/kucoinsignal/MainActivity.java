@@ -28,7 +28,7 @@ public class MainActivity extends Activity {
     private void build(){
         ScrollView scroll=new ScrollView(this);
         root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(24,44,24,24); root.setBackgroundColor(Color.rgb(16,17,20));
-        TextView title=tv("Сигнал фьючерсов PRO v6.1",27); title.setTypeface(Typeface.DEFAULT,Typeface.BOLD); root.addView(title);
+        TextView title=tv("Сигнал фьючерсов PRO v6.2",27); title.setTypeface(Typeface.DEFAULT,Typeface.BOLD); root.addView(title);
         root.addView(tv("Многоуровневая проверка • 1D + 4H + 1H + 15M + 5M • цена + объём + OI + стакан",13));
         symbol=new EditText(this); symbol.setText("XBTUSDTM"); symbol.setHint("Символ фьючерса"); symbol.setTextColor(Color.WHITE); symbol.setHintTextColor(Color.GRAY); root.addView(symbol);
         scan=new Button(this); scan.setText("АНАЛИЗ"); root.addView(scan);
@@ -69,7 +69,13 @@ public class MainActivity extends Activity {
                 long start=now-count*sec;
                 String base=API+"kline?symbol="+URLEncoder.encode(s,"UTF-8")+"&tradeType=FUTURES&klineType=TRADE&interval="+interval;
                 String u=base+"&startAt="+start+"&endAt="+end;
-                JSONObject j=getJson(u); JSONArray list=j.optJSONArray("data");
+                JSONObject j=getJson(u);
+                JSONArray list=j.optJSONArray("data");
+                // UTA v2 returns Futures klines inside data.list.
+                if(list==null){
+                    JSONObject d=j.optJSONObject("data");
+                    if(d!=null) list=d.optJSONArray("list");
+                }
                 if(list==null) continue;
                 for(int i=0;i<list.length();i++){
                     JSONArray q=list.getJSONArray(i); if(q.length()<6) continue;
