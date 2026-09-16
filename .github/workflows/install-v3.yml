@@ -30,22 +30,28 @@ jobs:
           rm -rf .install_tmp
           mkdir .install_tmp
 
-          unzip -q "$ZIP" -d .install_tmp
+          unzip -q -o "$ZIP" -d .install_tmp
 
           ROOT=".install_tmp"
           COUNT=$(find .install_tmp -mindepth 1 -maxdepth 1 | wc -l)
 
-          if [ "$COUNT" -eq 1 ] && [ -d "$(find .install_tmp -mindepth 1 -maxdepth 1 -type d | head -1)" ]; then
-            ROOT="$(find .install_tmp -mindepth 1 -maxdepth 1 -type d | head -1)"
+          if [ "$COUNT" -eq 1 ]; then
+            ONE=$(find .install_tmp -mindepth 1 -maxdepth 1 | head -1)
+            if [ -d "$ONE" ]; then
+              ROOT="$ONE"
+            fi
           fi
 
+          # Удаляем старый проект и ZIP,
+          # но НЕ трогаем .github/workflows.
           rm -rf app tests bin project config.json buildozer.spec requirements.txt README.md .gitignore
-          rm -f install-v3.yml
+          rm -f "$ZIP"
 
-          cp -a "$ROOT"/. .
+          # Копируем проект, исключая .github,
+          # чтобы Actions не пытался изменить сам workflow.
+          rsync -a --exclude='.github/' "$ROOT"/ ./
 
           rm -rf .install_tmp
-          rm -f "$ZIP"
 
       - name: Commit and push installed project
         shell: bash
