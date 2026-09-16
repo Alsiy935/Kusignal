@@ -55,7 +55,7 @@ jobs:
       - name: Install Python build tools
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install "cython<3" buildozer==1.5.0
+          python3 -m pip install "cython>=3,<4" buildozer==1.5.0
 
       - name: Verify project
         run: |
