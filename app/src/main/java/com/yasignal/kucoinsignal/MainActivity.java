@@ -180,7 +180,11 @@ public class MainActivity extends Activity {
 
     private Result analyze(Map<String,ArrayList<C>> d,MarketExtras ex){
         Bias b5=bias(d.get("5min")),b15=bias(d.get("15min")),b1=bias(d.get("1hour")),b4=bias(d.get("4hour")),bD=bias(d.get("1day"));
-        int L=bD.l*6+b4.l*5+b1.l*4+b15.l*3+b5.l*2, S=bD.s*6+b4.s*5+b1.s*4+b15.s*3+b5.s*2;
+        int L=b4.l*5+b1.l*4+b15.l*3+b5.l*2, S=b4.s*5+b1.s*4+b15.s*3+b5.s*2;
+        // 1D is a senior filter, not an automatic veto. Only a clear daily bias adds meaningful weight.
+        int dNet=bD.l-bD.s;
+        if(dNet>=4)L+=4; else if(dNet>=2)L+=2;
+        else if(dNet<=-4)S+=4; else if(dNet<=-2)S+=2;
         ArrayList<C> c5=d.get("5min"),c15=d.get("15min"),c1=d.get("1hour"),c4=d.get("4hour"),cd=d.get("1day");C z=c5.get(c5.size()-1),p=c5.get(c5.size()-2);double av=avgVol(c5,20),vr=av==0?1:z.vol/av;
         if(vr>=1.5){if(z.cl>p.cl)L+=7;else if(z.cl<p.cl)S+=7;}
         double r15h=highest(c15,30),r15l=lowest(c15,30),r1h=highest(c1,30),r1l=lowest(c1,30),price=z.cl;
@@ -196,19 +200,20 @@ public class MainActivity extends Activity {
         double hitL=regimeHit(c1,true),hitS=regimeHit(c1,false);if(hitL>=60)L+=4;if(hitS>=60)S+=4;
         int max=Math.max(L,S),min=Math.min(L,S),raw=clamp((int)Math.round(max*100.0/155.0));
         boolean long4h1h=b4.l>=8&&b1.l>=8,short4h1h=b4.s>=8&&b1.s>=8;
-        boolean alignLong=long4h1h&&bD.l>=8,alignShort=short4h1h&&bD.s>=8;
-        boolean aligned=alignLong||alignShort,strong=max-min>=14;
-        // Strict confidence caps: a high score is impossible without higher-timeframe confirmation.
+        boolean dailyStrongLong=dNet>=4&&bD.l>=10,dailyStrongShort=dNet<=-4&&bD.s>=10;
+        boolean dailyOpposesLong=dailyStrongShort,dailyOpposesShort=dailyStrongLong;
+        boolean aligned=long4h1h||short4h1h,strong=max-min>=14;
+        // 4H+1H define the trade direction. 1D only vetoes when its bias is clearly strong.
         if(!(long4h1h||short4h1h)) raw=Math.min(raw,59);
-        else if(!aligned) raw=Math.min(raw,69);
+        if((L>S&&dailyOpposesLong)||(S>L&&dailyOpposesShort)) raw=Math.min(raw,69);
         boolean tooCloseLong=dRes<Math.max(.003,atrPct*1.2),tooCloseShort=dSupport<Math.max(.003,atrPct*1.2);
         // Candles + OI + mark/index are required. Order book and funding are secondary and may be unavailable.
         boolean coreData=!Double.isNaN(oiDelta)&&!Double.isNaN(ex.index)&&!Double.isNaN(ex.mark);
         boolean enoughData=coreData;
         String dir="WAIT";
         if(raw>=72&&strong&&aligned&&enoughData){
-            if(L>S&&!tooCloseLong)dir="LONG";
-            else if(S>L&&!tooCloseShort)dir="SHORT";
+            if(L>S&&!tooCloseLong&&!dailyOpposesLong)dir="LONG";
+            else if(S>L&&!tooCloseShort&&!dailyOpposesShort)dir="SHORT";
         }
         double atr=Math.max(b5.a,b15.a*.7),entry=price,sl,tp1,tp2,tp3,swingL=lowest(c15,20),swingH=highest(c15,20);
         if(dir.equals("LONG")){sl=Math.min(swingL,entry-1.5*atr);if(sl>=entry)sl=entry-1.5*atr;double risk=entry-sl;tp1=entry+1.2*risk;tp2=entry+2*risk;tp3=entry+3*risk;}
@@ -218,6 +223,15 @@ public class MainActivity extends Activity {
     }
 
     private String priceFmt(double v){if(Double.isNaN(v))return"—";if(Math.abs(v)>=1000)return String.format(Locale.US,"%.1f",v);if(Math.abs(v)>=1)return String.format(Locale.US,"%.2f",v);return String.format(Locale.US,"%.6f",v);}
+    private String dailyLabel(Bias b){
+        int net=b.l-b.s;
+        if(net>=4 && b.l>=10)return "СИЛЬНЫЙ LONG ✓";
+        if(net<=-4 && b.s>=10)return "СИЛЬНЫЙ SHORT ✓";
+        if(net>=2)return "СЛАБЫЙ LONG";
+        if(net<=-2)return "СЛАБЫЙ SHORT";
+        return "НЕЙТРАЛЬНО";
+    }
+
     private void show(Result r){
         String candidate=r.l>r.s?"LONG":r.s>r.l?"SHORT":"НЕЙТРАЛЬНО";
         boolean long4=r.b4.l>=8&&r.b1.l>=8, short4=r.b4.s>=8&&r.b1.s>=8;
@@ -226,7 +240,7 @@ public class MainActivity extends Activity {
         signal.setText(ready?r.d+"  "+r.score+"/100":"ОЖИДАНИЕ  •  "+candidate+"  "+r.score+"/100");
         StringBuilder e=new StringBuilder();
         if(!ready){e.append("ВХОДА НЕТ — ОЖИДАНИЕ\n\nНаправление: ").append(candidate).append("\nОценка подтверждения: ").append(r.score).append("/100\n\nВХОД ЗАБЛОКИРОВАН: ");
-            if(!r.enoughData)e.append("НЕ ПОЛУЧЕНЫ КРИТИЧЕСКИЕ ДАННЫЕ");else if(!(long4||short4))e.append("4Ч/1Ч НЕ СОГЛАСОВАНЫ");else if(!(longAlign||shortAlign))e.append("1D НЕ ПОДТВЕРЖДАЕТ НАПРАВЛЕНИЕ");else if(Math.abs(r.l-r.s)<14)e.append("СЛИШКОМ МАЛАЯ РАЗНИЦА LONG/SHORT");else if((candidate.equals("LONG")&&r.tooCloseLong)||(candidate.equals("SHORT")&&r.tooCloseShort))e.append("СЛИШКОМ БЛИЗКО ПРОТИВОПОЛОЖНЫЙ УРОВЕНЬ");else e.append("НЕ ВСЕ ФИЛЬТРЫ ПОДТВЕРЖДАЮТ ВХОД");e.append("\n\n");}
+            if(!r.enoughData)e.append("НЕ ПОЛУЧЕНЫ КРИТИЧЕСКИЕ ДАННЫЕ");else if(!(long4||short4))e.append("4Ч/1Ч НЕ СОГЛАСОВАНЫ");else if((candidate.equals("LONG")&&r.bD.s-r.bD.l>=4)||(candidate.equals("SHORT")&&r.bD.l-r.bD.s>=4))e.append("1D СИЛЬНО ПРОТИВ НАПРАВЛЕНИЯ");else if(Math.abs(r.l-r.s)<14)e.append("СЛИШКОМ МАЛАЯ РАЗНИЦА LONG/SHORT");else if((candidate.equals("LONG")&&r.tooCloseLong)||(candidate.equals("SHORT")&&r.tooCloseShort))e.append("СЛИШКОМ БЛИЗКО ПРОТИВОПОЛОЖНЫЙ УРОВЕНЬ");else e.append("НЕ ВСЕ ФИЛЬТРЫ ПОДТВЕРЖДАЮТ ВХОД");e.append("\n\n");}
         else e.append("Вход: ").append(priceFmt(r.p)).append("\nСтоп-лосс: ").append(priceFmt(r.sl)).append("\nТейк-профит 1: ").append(priceFmt(r.tp1)).append("\nТейк-профит 2: ").append(priceFmt(r.tp2)).append("\nТейк-профит 3: ").append(priceFmt(r.tp3)).append("\n\n");
         String oi=Double.isNaN(r.oiDelta)?"N/A":String.format(Locale.US,"%+.2f%%",r.oiDelta*100);String f=Double.isNaN(r.funding)?"N/A":String.format(Locale.US,"%.5f%%",r.funding*100);String prem=String.format(Locale.US,"%+.3f%%",r.premium*100);
         details.setText(e.toString()+String.format(Locale.US,
@@ -240,7 +254,7 @@ public class MainActivity extends Activity {
             "Историческая устойчивость 1Ч: LONG %.0f%% / SHORT %.0f%%\n"+
             "ATR 1Ч / цена: %.2f%%\n\n"+
             "Фильтры: EMA20/50/200 • RSI • MACD • ADX/DI • VWAP • Bollinger • структура • объём • стакан • OI • funding • mark/index",
-            r.l,r.s,r.bD.l>=8?"LONG ✓":r.bD.s>=8?"SHORT ✓":"ДРУГОЕ",r.bD.l,r.bD.s,long4?"LONG ✓":short4?"SHORT ✓":"ДРУГОЕ",r.b4.l,r.b4.s,r.b1.l>=8?"LONG ✓":r.b1.s>=8?"SHORT ✓":"ДРУГОЕ",r.b1.l,r.b1.s,
+            r.l,r.s,dailyLabel(r.bD),r.bD.l,r.bD.s,long4?"LONG ✓":short4?"SHORT ✓":"ДРУГОЕ",r.b4.l,r.b4.s,r.b1.l>=8?"LONG ✓":r.b1.s>=8?"SHORT ✓":"ДРУГОЕ",r.b1.l,r.b1.s,
             r.b5.rsi,r.b15.rsi,r.b1.rsi,r.b4.rsi,r.bD.rsi,r.b1.adx,r.b1.plusDi,r.b1.minusDi,priceFmt(r.vwap),String.format(Locale.US,"%.2f",r.bb),r.vr,r.imb*100.0,oi,f,prem,r.hitL,r.hitS,r.atrPct*100));
         status.setText("Обновлено: "+new Date()+" • закрытые свечи • строгий фильтр 1D+4Ч+1Ч • без гарантии результата");
     }
