@@ -8,6 +8,7 @@ version = 1.0.0
 requirements = python3,kivy==2.3.0,numpy==1.26.4,pandas==2.2.3,requests==2.32.3,scikit-learn==1.5.2,joblib==1.4.2
 orientation = portrait
 fullscreen = 0
+
 android.api = 35
 android.minapi = 24
 android.ndk = 27c
