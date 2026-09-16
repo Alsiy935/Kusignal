@@ -71,6 +71,10 @@ jobs:
         shell: bash
         run: |
           set +e
+          export JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64
+          export PATH="$JAVA_HOME/bin:$PATH"
+          java -version
+          javac -version
           buildozer -v android debug 2>&1 | tee build.log
           STATUS=${PIPESTATUS[0]}
           exit $STATUS
