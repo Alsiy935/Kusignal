@@ -5,7 +5,7 @@ package.domain = org.selflearningtrader
 source.dir = app
 source.include_exts = py,json,csv,md
 version = 1.0.0
-requirements = python3,kivy==2.3.0,numpy==2.3.0,pandas==2.2.3,requests==2.32.3,scikit-learn==1.5.2,joblib==1.4.2
+requirements = python3,kivy==2.3.0,numpy,pandas==2.2.3,requests==2.32.3,scikit-learn==1.5.2,joblib==1.4.2
 orientation = portrait
 fullscreen = 0
 
