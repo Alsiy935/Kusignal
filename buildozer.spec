@@ -9,7 +9,7 @@ requirements = python3,kivy==2.3.0,numpy==1.26.4,pandas==2.2.3,requests==2.32.3,
 orientation = portrait
 fullscreen = 0
 android.api = 35
-android.minapi = 23
+android.minapi = 24
 android.ndk = 27c
 android.permissions = INTERNET
 android.archs = arm64-v8a
