@@ -28,7 +28,7 @@ public class MainActivity extends Activity {
     private void build(){
         ScrollView scroll=new ScrollView(this);
         root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(24,44,24,24); root.setBackgroundColor(Color.rgb(16,17,20));
-        TextView title=tv("Сигнал фьючерсов PRO v6.2",27); title.setTypeface(Typeface.DEFAULT,Typeface.BOLD); root.addView(title);
+        TextView title=tv("Сигнал фьючерсов PRO v6.3",27); title.setTypeface(Typeface.DEFAULT,Typeface.BOLD); root.addView(title);
         root.addView(tv("Многоуровневая проверка • 1D + 4H + 1H + 15M + 5M • цена + объём + OI + стакан",13));
         symbol=new EditText(this); symbol.setText("XBTUSDTM"); symbol.setHint("Символ фьючерса"); symbol.setTextColor(Color.WHITE); symbol.setHintTextColor(Color.GRAY); root.addView(symbol);
         scan=new Button(this); scan.setText("АНАЛИЗ"); root.addView(scan);
@@ -195,10 +195,21 @@ public class MainActivity extends Activity {
         if(price>vwap)L+=3;else S+=3;if(bb>.8&&price>vwap)L+=2;else if(bb<.2&&price<vwap)S+=2;
         double hitL=regimeHit(c1,true),hitS=regimeHit(c1,false);if(hitL>=60)L+=4;if(hitS>=60)S+=4;
         int max=Math.max(L,S),min=Math.min(L,S),raw=clamp((int)Math.round(max*100.0/155.0));
-        boolean alignLong=bD.l>=8&&b4.l>=8&&b1.l>=8,alignShort=bD.s>=8&&b4.s>=8&&b1.s>=8,aligned=alignLong||alignShort,strong=max-min>=14;
+        boolean long4h1h=b4.l>=8&&b1.l>=8,short4h1h=b4.s>=8&&b1.s>=8;
+        boolean alignLong=long4h1h&&bD.l>=8,alignShort=short4h1h&&bD.s>=8;
+        boolean aligned=alignLong||alignShort,strong=max-min>=14;
+        // Strict confidence caps: a high score is impossible without higher-timeframe confirmation.
+        if(!(long4h1h||short4h1h)) raw=Math.min(raw,59);
+        else if(!aligned) raw=Math.min(raw,69);
         boolean tooCloseLong=dRes<Math.max(.003,atrPct*1.2),tooCloseShort=dSupport<Math.max(.003,atrPct*1.2);
-        boolean enoughData=ex.bid+ex.ask>0&&!Double.isNaN(oiDelta)&&!Double.isNaN(ex.funding)&&!Double.isNaN(ex.index)&&!Double.isNaN(ex.mark);
-        String dir="WAIT";if(raw>=72&&strong&&aligned&&enoughData){if(L>S&&!tooCloseLong)dir="LONG";else if(S>L&&!tooCloseShort)dir="SHORT";}
+        // Candles + OI + mark/index are required. Order book and funding are secondary and may be unavailable.
+        boolean coreData=!Double.isNaN(oiDelta)&&!Double.isNaN(ex.index)&&!Double.isNaN(ex.mark);
+        boolean enoughData=coreData;
+        String dir="WAIT";
+        if(raw>=72&&strong&&aligned&&enoughData){
+            if(L>S&&!tooCloseLong)dir="LONG";
+            else if(S>L&&!tooCloseShort)dir="SHORT";
+        }
         double atr=Math.max(b5.a,b15.a*.7),entry=price,sl,tp1,tp2,tp3,swingL=lowest(c15,20),swingH=highest(c15,20);
         if(dir.equals("LONG")){sl=Math.min(swingL,entry-1.5*atr);if(sl>=entry)sl=entry-1.5*atr;double risk=entry-sl;tp1=entry+1.2*risk;tp2=entry+2*risk;tp3=entry+3*risk;}
         else if(dir.equals("SHORT")){sl=Math.max(swingH,entry+1.5*atr);if(sl<=entry)sl=entry+1.5*atr;double risk=sl-entry;tp1=entry-1.2*risk;tp2=entry-2*risk;tp3=entry-3*risk;}
@@ -208,11 +219,14 @@ public class MainActivity extends Activity {
 
     private String priceFmt(double v){if(Double.isNaN(v))return"—";if(Math.abs(v)>=1000)return String.format(Locale.US,"%.1f",v);if(Math.abs(v)>=1)return String.format(Locale.US,"%.2f",v);return String.format(Locale.US,"%.6f",v);}
     private void show(Result r){
-        String candidate=r.l>r.s?"LONG":r.s>r.l?"SHORT":"НЕЙТРАЛЬНО";boolean longAlign=r.bD.l>=8&&r.b4.l>=8&&r.b1.l>=8,shortAlign=r.bD.s>=8&&r.b4.s>=8&&r.b1.s>=8;boolean ready=!r.d.equals("WAIT");
+        String candidate=r.l>r.s?"LONG":r.s>r.l?"SHORT":"НЕЙТРАЛЬНО";
+        boolean long4=r.b4.l>=8&&r.b1.l>=8, short4=r.b4.s>=8&&r.b1.s>=8;
+        boolean longAlign=long4&&r.bD.l>=8, shortAlign=short4&&r.bD.s>=8;
+        boolean ready=!r.d.equals("WAIT");
         signal.setText(ready?r.d+"  "+r.score+"/100":"ОЖИДАНИЕ  •  "+candidate+"  "+r.score+"/100");
         StringBuilder e=new StringBuilder();
         if(!ready){e.append("ВХОДА НЕТ — ОЖИДАНИЕ\n\nНаправление: ").append(candidate).append("\nОценка подтверждения: ").append(r.score).append("/100\n\nВХОД ЗАБЛОКИРОВАН: ");
-            if(!r.enoughData)e.append("НЕ ПОЛУЧЕНЫ КРИТИЧЕСКИЕ ДАННЫЕ");else if(!(longAlign||shortAlign))e.append("1D/4Ч/1Ч НЕ СОГЛАСОВАНЫ");else if(Math.abs(r.l-r.s)<14)e.append("СЛИШКОМ МАЛАЯ РАЗНИЦА LONG/SHORT");else if((candidate.equals("LONG")&&r.tooCloseLong)||(candidate.equals("SHORT")&&r.tooCloseShort))e.append("СЛИШКОМ БЛИЗКО ПРОТИВОПОЛОЖНЫЙ УРОВЕНЬ");else e.append("НЕ ВСЕ ФИЛЬТРЫ ПОДТВЕРЖДАЮТ ВХОД");e.append("\n\n");}
+            if(!r.enoughData)e.append("НЕ ПОЛУЧЕНЫ КРИТИЧЕСКИЕ ДАННЫЕ");else if(!(long4||short4))e.append("4Ч/1Ч НЕ СОГЛАСОВАНЫ");else if(!(longAlign||shortAlign))e.append("1D НЕ ПОДТВЕРЖДАЕТ НАПРАВЛЕНИЕ");else if(Math.abs(r.l-r.s)<14)e.append("СЛИШКОМ МАЛАЯ РАЗНИЦА LONG/SHORT");else if((candidate.equals("LONG")&&r.tooCloseLong)||(candidate.equals("SHORT")&&r.tooCloseShort))e.append("СЛИШКОМ БЛИЗКО ПРОТИВОПОЛОЖНЫЙ УРОВЕНЬ");else e.append("НЕ ВСЕ ФИЛЬТРЫ ПОДТВЕРЖДАЮТ ВХОД");e.append("\n\n");}
         else e.append("Вход: ").append(priceFmt(r.p)).append("\nСтоп-лосс: ").append(priceFmt(r.sl)).append("\nТейк-профит 1: ").append(priceFmt(r.tp1)).append("\nТейк-профит 2: ").append(priceFmt(r.tp2)).append("\nТейк-профит 3: ").append(priceFmt(r.tp3)).append("\n\n");
         String oi=Double.isNaN(r.oiDelta)?"N/A":String.format(Locale.US,"%+.2f%%",r.oiDelta*100);String f=Double.isNaN(r.funding)?"N/A":String.format(Locale.US,"%.5f%%",r.funding*100);String prem=String.format(Locale.US,"%+.3f%%",r.premium*100);
         details.setText(e.toString()+String.format(Locale.US,
@@ -221,14 +235,14 @@ public class MainActivity extends Activity {
             "RSI 5м/15м/1ч/4ч/1D: %.1f / %.1f / %.1f / %.1f / %.1f\n"+
             "ADX 1Ч: %.1f  +DI %.1f  -DI %.1f\n"+
             "VWAP 5м: %s  •  BB %s\n"+
-            "Объём / средний: %.2f\nДисбаланс стакана: %+.2f\n"+
+            "Объём / средний: %.2f\nДисбаланс стакана: %+.1f%%\n"+
             "Изменение OI ~30 мин: %s\nФандинг: %s\nMark-Index: %s\n"+
             "Историческая устойчивость 1Ч: LONG %.0f%% / SHORT %.0f%%\n"+
             "ATR 1Ч / цена: %.2f%%\n\n"+
             "Фильтры: EMA20/50/200 • RSI • MACD • ADX/DI • VWAP • Bollinger • структура • объём • стакан • OI • funding • mark/index",
-            r.l,r.s,longAlign?"LONG ✓":shortAlign?"SHORT ✓":"ДРУГОЕ",r.bD.l,r.bD.s,longAlign?"LONG ✓":shortAlign?"SHORT ✓":"ДРУГОЕ",r.b4.l,r.b4.s,longAlign?"LONG ✓":shortAlign?"SHORT ✓":"ДРУГОЕ",r.b1.l,r.b1.s,
-            r.b5.rsi,r.b15.rsi,r.b1.rsi,r.b4.rsi,r.bD.rsi,r.b1.adx,r.b1.plusDi,r.b1.minusDi,priceFmt(r.vwap),String.format(Locale.US,"%.2f",r.bb),r.vr,r.imb,oi,f,prem,r.hitL,r.hitS,r.atrPct*100));
-        status.setText("Обновлено: "+new Date()+" • закрытые свечи • вход только при согласовании 1D+4Ч+1Ч • без гарантии результата");
+            r.l,r.s,r.bD.l>=8?"LONG ✓":r.bD.s>=8?"SHORT ✓":"ДРУГОЕ",r.bD.l,r.bD.s,long4?"LONG ✓":short4?"SHORT ✓":"ДРУГОЕ",r.b4.l,r.b4.s,r.b1.l>=8?"LONG ✓":r.b1.s>=8?"SHORT ✓":"ДРУГОЕ",r.b1.l,r.b1.s,
+            r.b5.rsi,r.b15.rsi,r.b1.rsi,r.b4.rsi,r.bD.rsi,r.b1.adx,r.b1.plusDi,r.b1.minusDi,priceFmt(r.vwap),String.format(Locale.US,"%.2f",r.bb),r.vr,r.imb*100.0,oi,f,prem,r.hitL,r.hitS,r.atrPct*100));
+        status.setText("Обновлено: "+new Date()+" • закрытые свечи • строгий фильтр 1D+4Ч+1Ч • без гарантии результата");
     }
 
     static class C{long t;double o,h,l,cl,vol;C(long t,double o,double h,double l,double c,double v){this.t=t;this.o=o;this.h=h;this.l=l;cl=c;vol=v;}}
