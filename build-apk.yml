@@ -2,34 +2,81 @@ name: Build Android APK
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git zip unzip openjdk-17-jdk \
+            autoconf automake libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev \
+            cmake libffi-dev libssl-dev
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Install Python build tools
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install "cython<3" buildozer==1.5.0
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Verify project
+        run: |
+          echo "=== PROJECT FILES ==="
+          ls -la
+          echo "=== BUILDOZER SPEC ==="
+          cat buildozer.spec
+          echo "=== REQUIREMENTS ==="
+          cat requirements.txt
+          echo "=== MAIN.PY ==="
+          test -f app/main.py
 
-      - name: Build APK
-        run: gradle assembleDebug --no-daemon
+      - name: Build Android APK with full log
+        shell: bash
+        run: |
+          set +e
+          buildozer -v android debug 2>&1 | tee build.log
+          STATUS=${PIPESTATUS[0]}
 
-      - name: Upload APK
+          echo ""
+          echo "========================================"
+          echo "BUILDOZER EXIT CODE: $STATUS"
+          echo "========================================"
+
+          exit $STATUS
+
+      - name: Show error tail
+        if: failure()
+        shell: bash
+        run: |
+          echo "===== LAST 250 LINES OF BUILD LOG ====="
+          tail -n 250 build.log || true
+
+          echo ""
+          echo "===== ERROR LINES ====="
+          grep -inE "error|failed|exception|traceback|fatal" build.log | tail -n 100 || true
+
+      - name: Upload complete build log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: KuCoinSignalApp-debug
-          path: "**/build/outputs/apk/**/*.apk"
+          name: SelfLearningTrader-build-log
+          path: build.log
+          if-no-files-found: warn
+
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SelfLearningTrader-debug-apk
+          path: bin/*.apk
+          if-no-files-found: error
