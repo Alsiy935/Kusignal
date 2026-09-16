@@ -1,1 +1,37 @@
+name: Install project ZIP
 
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '*.zip'
+
+permissions:
+  contents: write
+
+jobs:
+  install:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find and extract project ZIP
+        shell: bash
+        run: |
+          set -e
+          ZIP=$(find . -maxdepth 1 -type f -name '*.zip' -print -quit)
+          test -n "$ZIP"
+          rm -rf .install_tmp
+          mkdir .install_tmp
+          unzip -q "$ZIP" -d .install_tmp
+          ROOT=".install_tmp"
+          COUNT=$(find .install_tmp -mindepth 1 -maxdepth 1 | wc -l)
+          if [ "$COUNT" -eq 1 ] && [ -d "$(find .install_tmp -mindepth 1 -maxdepth 1 -type d | head -1)" ]; then
+            ROOT="$(find .install_tmp -mindepth 1 -maxdepth 1 -type d | head -1)"
+          fi
+          rm -rf app tests bin .github project config.json buildozer.spec requirements.txt README.md .gitignore
+          cp -a "$ROOT"/. .
+          
