@@ -18,6 +18,7 @@ android.accept_sdk_license = True
 p4a.fork = kivy
 p4a.branch = develop
 p4a.local_recipes = p4a-recipes
+# Use the current Kivy/p4a recipe stack with the supported Cython version
 
 [buildozer]
 log_level = 2
