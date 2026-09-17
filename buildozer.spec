@@ -8,7 +8,7 @@ version = 1.0.0
 requirements = python3,kivy==2.3.1,numpy
 orientation = portrait
 fullscreen = 0
-android.api = 35
+android.api = 34
 android.minapi = 24
 android.ndk = 28c
 android.permissions = INTERNET

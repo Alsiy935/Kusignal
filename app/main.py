@@ -8,6 +8,8 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.uix.scrollview import ScrollView
+from kivy.metrics import dp
+from kivy.core.window import Window
 
 from core.config import load
 from core.exchange import KuCoin
@@ -16,15 +18,18 @@ from core.engine import LearningEngine
 
 class UI(BoxLayout):
     def __init__(self, engine, **kw):
-        super().__init__(orientation="vertical", padding=(12, 8, 12, 10), spacing=6, **kw)
+        # The APK targets Android 14 (API 34) so Android 15 does not force
+        # edge-to-edge. Keep a small internal margin for a clean header.
+        super().__init__(orientation="vertical", padding=(dp(12), dp(10), dp(12), dp(10)), spacing=dp(6), **kw)
+        Window.fullscreen = False
         self.engine = engine
         self.menu_open = False
 
-        header = BoxLayout(orientation="horizontal", size_hint_y=None, height=58, spacing=6)
+        header = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(52), spacing=dp(6))
         self.title = Label(text="SelfLearningTrader Ultimate", font_size="18sp", halign="left", valign="middle")
         self.title.bind(size=lambda obj, val: setattr(obj, "text_size", val))
         header.add_widget(self.title)
-        self.menu_button = Button(text="...", font_size="22sp", size_hint=(None, 1), width=58, background_normal="")
+        self.menu_button = Button(text="...", font_size="22sp", bold=True, size_hint=(None, 1), width=dp(52), background_normal="", background_down="", background_color=(0, 0, 0, 0), color=(1, 1, 1, 1), padding=(0, 0))
         self.menu_button.bind(on_release=self.toggle_menu)
         header.add_widget(self.menu_button)
         self.add_widget(header)
