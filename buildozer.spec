@@ -5,7 +5,7 @@ package.domain = org.selflearningtrader
 source.dir = app
 source.include_exts = py,json,csv,md
 version = 1.0.0
-requirements = python3,kivy==2.3.1,numpy,requests==2.32.3
+requirements = python3,kivy==2.3.1,numpy
 orientation = portrait
 fullscreen = 0
 android.api = 35
