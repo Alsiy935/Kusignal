@@ -1,0 +1,16 @@
+diff --git a/kivy/core/window/_window_sdl2.pyx b/kivy/core/window/_window_sdl2.pyx
+index 46e15ec63..5002cd0f9 100644
+--- a/kivy/core/window/_window_sdl2.pyx
++++ b/kivy/core/window/_window_sdl2.pyx
+@@ -746,7 +746,13 @@ cdef class _WindowSDL2Storage:
+              pass
+ 
+      def flip(self):
+ -        SDL_GL_SwapWindow(self.win)
+ +        with nogil:
+ +            SDL_GL_SwapWindow(self.win)
+@@ -627,7 +633,7 @@ cdef extern from "SDL.h":
+      cdef int SDL_GL_SetSwapInterval(int interval)
+      cdef int SDL_GL_GetSwapInterval()
+ -    cdef void SDL_GL_SwapWindow(SDL_Window * window)
+ +    cdef void SDL_GL_SwapWindow(SDL_Window * window) nogil
