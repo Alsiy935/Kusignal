@@ -45,11 +45,57 @@ class KivyRecipe(PyProjectRecipe):
 
     hostpython_prerequisites = ["cython>=0.29.1,<=3.0.12"]
 
-    patches = [
-        ("sdl-gl-swapwindow-nogil.patch", is_kivy_affected_by_deadlock_issue),
-        ("use_cython.patch", is_kivy_less_than_3),
-        ("no-ast-str.patch", is_kivy_less_than_3),
-    ]
+    # Apply the upstream Kivy Android source adjustments directly in
+    # prebuild_arch instead of relying on fragile line-numbered patch files.
+    # This avoids patch rejects when the Kivy archive changes formatting.
+    patches = []
+
+    def prebuild_arch(self, arch):
+        super().prebuild_arch(arch)
+        build_dir = self.get_build_dir(arch.arch)
+
+        # Kivy 2.3.1 disables Cython on Android in setup.py. p4a must
+        # generate the C sources before compiling the Android extensions.
+        setup_py = join(build_dir, "setup.py")
+        text = open(setup_py, encoding="utf-8").read()
+        old = "if platform in ('ios', 'android'):"
+        new = "if platform in ('ios',):"
+        if old in text:
+            text = text.replace(old, new, 1)
+        elif new not in text:
+            raise RuntimeError("Kivy setup.py Cython Android guard not found")
+        open(setup_py, "w", encoding="utf-8").write(text)
+
+        # Python 3.14 removed the old ast.Str compatibility behaviour used
+        # by this Kivy release. Apply the same source change as p4a's patch.
+        parser_py = join(build_dir, "kivy", "lang", "parser.py")
+        if Path(parser_py).exists():
+            p = open(parser_py, encoding="utf-8").read()
+            old_block = """                if isinstance(n, ast.Str):
+                    # NOTE: required for python3.6
+                    yield from cls.get_names_from_expression(n.s)
+                else:
+                    yield from cls.get_names_from_expression(n.value)"""
+            new_block = "                yield from cls.get_names_from_expression(n.value)"
+            if old_block in p:
+                p = p.replace(old_block, new_block, 1)
+                open(parser_py, "w", encoding="utf-8").write(p)
+
+        # Apply the Android SDL2 deadlock fix from the upstream recipe.
+        window_pyx = join(build_dir, "kivy", "core", "window", "_window_sdl2.pyx")
+        if Path(window_pyx).exists():
+            w = open(window_pyx, encoding="utf-8").read()
+            w = w.replace("        SDL_GL_SwapWindow(self.win)",
+                          "        with nogil:\n            SDL_GL_SwapWindow(self.win)", 1)
+            open(window_pyx, "w", encoding="utf-8").write(w)
+
+        sdl_pxi = join(build_dir, "kivy", "lib", "sdl2.pxi")
+        if Path(sdl_pxi).exists():
+            p = open(sdl_pxi, encoding="utf-8").read()
+            p = p.replace("cdef void SDL_GL_SwapWindow(SDL_Window * window)",
+                          "cdef void SDL_GL_SwapWindow(SDL_Window * window) nogil", 1)
+            open(sdl_pxi, "w", encoding="utf-8").write(p)
+
 
     @property
     def need_stl_shared(self):
