@@ -51,42 +51,72 @@ class KivyRecipe(PyProjectRecipe):
     # This avoids patch rejects when the Kivy archive changes formatting.
     patches = []
 
-    def prebuild_arch(self, arch):
-        super().prebuild_arch(arch)
-        build_dir = self.get_build_dir(arch.arch)
+    def _fix_kivy_sources(self, arch):
+        """Normalize Kivy 2.3.1 sources immediately before wheel build.
 
-        # Kivy 2.3.1 disables Cython on Android in setup.py. p4a must
-        # generate the C sources before compiling the Android extensions.
-        setup_py = join(build_dir, "setup.py")
-        text = open(setup_py, encoding="utf-8").read()
-        old = "if platform in ('ios', 'android'):"
-        new = "if platform in ('ios',):"
-        if old in text:
-            text = text.replace(old, new, 1)
-        elif new not in text:
-            raise RuntimeError("Kivy setup.py Cython Android guard not found")
-        open(setup_py, "w", encoding="utf-8").write(text)
+        The 2.3.1 source already contains the SDL2 deadlock fix. Some
+        p4a/Kivy build combinations can nevertheless leave the declaration
+        as ``nogil nogil``. Cython rejects that exact form. Normalize it
+        after all recipe preparation/patching and immediately before the
+        PyProjectRecipe wheel build.
+        """
+        build_dir = Path(self.get_build_dir(arch.arch))
 
-        # Python 3.14 removed the old ast.Str compatibility behaviour used
-        # by this Kivy release. Apply the same source change as p4a's patch.
-        parser_py = join(build_dir, "kivy", "lang", "parser.py")
-        if Path(parser_py).exists():
-            p = open(parser_py, encoding="utf-8").read()
+        # Python 3.14 compatibility change used by p4a's no-ast-str patch.
+        parser_py = build_dir / "kivy" / "lang" / "parser.py"
+        if parser_py.exists():
+            text = parser_py.read_text(encoding="utf-8")
             old_block = """                if isinstance(n, ast.Str):
                     # NOTE: required for python3.6
                     yield from cls.get_names_from_expression(n.s)
                 else:
                     yield from cls.get_names_from_expression(n.value)"""
             new_block = "                yield from cls.get_names_from_expression(n.value)"
-            if old_block in p:
-                p = p.replace(old_block, new_block, 1)
-                open(parser_py, "w", encoding="utf-8").write(p)
-            elif "yield from cls.get_names_from_expression(n.value)" not in p:
-                raise RuntimeError("Kivy parser.py AST compatibility block not found")
+            if old_block in text:
+                text = text.replace(old_block, new_block, 1)
+                parser_py.write_text(text, encoding="utf-8")
 
-        # Kivy 2.3.1 already contains the SDL2 nogil fix in its source.
-        # Do not re-apply it here: doing so would create duplicate `nogil`
-        # declarations and break Cython compilation.
+        # Never allow the invalid duplicate Cython modifier to reach the
+        # wheel build. Keep exactly one ``nogil`` on the SDL declaration.
+        source_root = build_dir / "kivy"
+        for path in source_root.rglob("*"):
+            if path.suffix not in {".pyx", ".pxd", ".pxi"} or not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+            fixed = text.replace("nogil nogil", "nogil")
+            if fixed != text:
+                path.write_text(fixed, encoding="utf-8")
+
+        sdl_pxi = source_root / "lib" / "sdl2.pxi"
+        if sdl_pxi.exists():
+            text = sdl_pxi.read_text(encoding="utf-8")
+            text = text.replace(
+                "SDL_GL_SwapWindow(SDL_Window * window) nogil nogil",
+                "SDL_GL_SwapWindow(SDL_Window * window) nogil",
+            )
+            sdl_pxi.write_text(text, encoding="utf-8")
+
+        # Fail early with a precise message instead of a long Cython build
+        # if another preparation step reintroduces the duplicate modifier.
+        leftovers = []
+        for path in source_root.rglob("*"):
+            if path.suffix in {".pyx", ".pxd", ".pxi"} and path.is_file():
+                text = path.read_text(encoding="utf-8")
+                if "nogil nogil" in text:
+                    leftovers.append(str(path))
+        if leftovers:
+            raise RuntimeError("Duplicate Cython 'nogil nogil' remains in: " + ", ".join(leftovers))
+
+    def prebuild_arch(self, arch):
+        # Recipe.py dispatches this to prebuild_<arch>; keep the superclass
+        # call so the normal p4a preparation remains intact.
+        super().prebuild_arch(arch)
+
+    def build_arch(self, arch):
+        # This runs after p4a recipe patching and immediately before
+        # PyProjectRecipe invokes `python -m build --wheel`.
+        self._fix_kivy_sources(arch)
+        super().build_arch(arch)
 
 
     @property
