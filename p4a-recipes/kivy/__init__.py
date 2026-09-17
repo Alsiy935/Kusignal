@@ -84,28 +84,9 @@ class KivyRecipe(PyProjectRecipe):
             elif "yield from cls.get_names_from_expression(n.value)" not in p:
                 raise RuntimeError("Kivy parser.py AST compatibility block not found")
 
-        # Apply the Android SDL2 deadlock fix from the upstream recipe.
-        window_pyx = join(build_dir, "kivy", "core", "window", "_window_sdl2.pyx")
-        if Path(window_pyx).exists():
-            w = open(window_pyx, encoding="utf-8").read()
-            old_swap = "        SDL_GL_SwapWindow(self.win)"
-            new_swap = "        with nogil:\n            SDL_GL_SwapWindow(self.win)"
-            if old_swap in w:
-                w = w.replace(old_swap, new_swap, 1)
-                open(window_pyx, "w", encoding="utf-8").write(w)
-            elif new_swap not in w:
-                raise RuntimeError("Kivy _window_sdl2.pyx SDL_GL_SwapWindow call not found")
-
-        sdl_pxi = join(build_dir, "kivy", "lib", "sdl2.pxi")
-        if Path(sdl_pxi).exists():
-            p = open(sdl_pxi, encoding="utf-8").read()
-            old_decl = "cdef void SDL_GL_SwapWindow(SDL_Window * window)"
-            new_decl = "cdef void SDL_GL_SwapWindow(SDL_Window * window) nogil"
-            if old_decl in p:
-                p = p.replace(old_decl, new_decl, 1)
-                open(sdl_pxi, "w", encoding="utf-8").write(p)
-            elif new_decl not in p:
-                raise RuntimeError("Kivy sdl2.pxi SDL_GL_SwapWindow declaration not found")
+        # Kivy 2.3.1 already contains the SDL2 nogil fix in its source.
+        # Do not re-apply it here: doing so would create duplicate `nogil`
+        # declarations and break Cython compilation.
 
 
     @property
