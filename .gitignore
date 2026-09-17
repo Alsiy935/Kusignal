@@ -1,7 +1,0 @@
-__pycache__/
-*.pyc
-.buildozer/
-bin/
-data/*.csv
-models/*.joblib
-logs/*.csv
