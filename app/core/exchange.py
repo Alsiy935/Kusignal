@@ -1,6 +1,12 @@
 import json
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+import ssl
+
+try:
+    import certifi
+except ImportError:
+    certifi = None
 
 BASE = "https://api.kucoin.com"
 
@@ -23,7 +29,12 @@ class KuCoin:
             },
         )
 
-        with urlopen(request, timeout=self.timeout) as response:
+        if certifi is not None:
+            context = ssl.create_default_context(cafile=certifi.where())
+        else:
+            context = ssl.create_default_context()
+
+        with urlopen(request, timeout=self.timeout, context=context) as response:
             data = json.loads(response.read().decode("utf-8"))
 
         if data.get("code") not in (None, "200000"):

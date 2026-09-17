@@ -1,5 +1,4 @@
 import threading
-import traceback
 from pathlib import Path
 
 from kivy.app import App
@@ -69,8 +68,10 @@ class UI(BoxLayout):
     def worker(self, fn):
         self.info.text = "Работаю...\nНе закрывайте приложение."
         def w():
-            try: result = fn()
-            except Exception: result = "Ошибка:\n" + traceback.format_exc()
+            try:
+                result = fn()
+            except Exception as e:
+                result = "Ошибка: " + str(e)
             Clock.schedule_once(lambda dt: self.show(result), 0)
         threading.Thread(target=w, daemon=True).start()
     def show(self, value): self.info.text = str(value)
