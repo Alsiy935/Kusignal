@@ -1,332 +1,83 @@
 from pathlib import Path
 import json
 import time
-
-import joblib
 import numpy as np
-import pandas as pd
-
 from .features import FEATURES
 
-
-NAMES = {
-    0: "SHORT",
-    1: "WAIT",
-    2: "LONG",
-}
+NAMES = {0: "SHORT", 1: "WAIT", 2: "LONG"}
 
 
 class NumpyClassifier:
     def __init__(self, n_features, n_classes=3):
-        self.n_features = n_features
-        self.n_classes = n_classes
+        self.n_features = n_features; self.n_classes = n_classes
         self.weights = np.zeros((n_features, n_classes), dtype=np.float64)
         self.bias = np.zeros(n_classes, dtype=np.float64)
         self.means = np.zeros(n_features, dtype=np.float64)
         self.stds = np.ones(n_features, dtype=np.float64)
-        self.classes_ = np.arange(n_classes)
 
-    def _softmax(self, z):
-        z = z - np.max(z, axis=1, keepdims=True)
-        e = np.exp(np.clip(z, -50, 50))
-        return e / np.sum(e, axis=1, keepdims=True)
-
-    def fit(
-        self,
-        X,
-        y,
-        epochs=400,
-        learning_rate=0.03,
-        l2=0.0005,
-    ):
-        X = np.asarray(X, dtype=np.float64)
-        y = np.asarray(y, dtype=np.int64)
-
-        X = np.nan_to_num(
-            X,
-            nan=0.0,
-            posinf=0.0,
-            neginf=0.0,
-        )
-
-        self.means = np.mean(X, axis=0)
-        self.stds = np.std(X, axis=0)
-        self.stds[self.stds < 1e-8] = 1.0
-
-        Xn = (X - self.means) / self.stds
-
-        Y = np.zeros((len(y), self.n_classes), dtype=np.float64)
-        Y[np.arange(len(y)), y] = 1.0
-
-        n = float(max(len(Xn), 1))
-
+    def fit(self, X, y, epochs=220, learning_rate=0.025, l2=0.0005):
+        X = np.asarray(X, dtype=float); y = np.asarray(y, dtype=int)
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        self.means = np.mean(X, axis=0); self.stds = np.std(X, axis=0); self.stds[self.stds < 1e-8] = 1.0
+        X = (X - self.means) / self.stds
+        Y = np.zeros((len(y), self.n_classes)); Y[np.arange(len(y)), y] = 1.0
+        n = float(max(1, len(X)))
         for _ in range(epochs):
-            logits = Xn @ self.weights + self.bias
-            probs = self._softmax(logits)
-
-            error = probs - Y
-
-            grad_w = (Xn.T @ error) / n
-            grad_b = np.mean(error, axis=0)
-
-            grad_w += l2 * self.weights
-
-            self.weights -= learning_rate * grad_w
-            self.bias -= learning_rate * grad_b
-
-        self.classes_ = np.arange(self.n_classes)
+            z = X @ self.weights + self.bias; z -= np.max(z, axis=1, keepdims=True)
+            p = np.exp(np.clip(z, -50, 50)); p /= np.sum(p, axis=1, keepdims=True)
+            e = p - Y
+            self.weights -= learning_rate * ((X.T @ e) / n + l2 * self.weights)
+            self.bias -= learning_rate * np.mean(e, axis=0)
         return self
 
-    def _prepare(self, X):
-        X = np.asarray(X, dtype=np.float64)
-
-        X = np.nan_to_num(
-            X,
-            nan=0.0,
-            posinf=0.0,
-            neginf=0.0,
-        )
-
-        return (X - self.means) / self.stds
-
     def predict_proba(self, X):
-        Xn = self._prepare(X)
-        logits = Xn @ self.weights + self.bias
-        return self._softmax(logits)
+        X = np.asarray(X, dtype=float); X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        X = (X - self.means) / self.stds
+        z = X @ self.weights + self.bias; z -= np.max(z, axis=1, keepdims=True)
+        p = np.exp(np.clip(z, -50, 50)); return p / np.sum(p, axis=1, keepdims=True)
 
-    def predict(self, X):
-        return np.argmax(self.predict_proba(X), axis=1)
+    def predict(self, X): return np.argmax(self.predict_proba(X), axis=1)
 
 
 class ModelManager:
     def __init__(self, root: Path):
-        self.root = root
-        self.models = root / "models"
+        self.models = Path(root) / "models"; self.models.mkdir(parents=True, exist_ok=True)
+        self.champion = self.models / "champion.npz"; self.meta = self.models / "champion.json"
 
-        self.models.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
-        self.champion = self.models / "champion.joblib"
-        self.meta = self.models / "champion.json"
-
-    def _new(self):
-        return NumpyClassifier(
-            n_features=len(FEATURES),
-            n_classes=3,
-        )
+    def _new(self): return NumpyClassifier(len(FEATURES), 3)
 
     def _load(self):
-        if not self.champion.exists():
-            return None
-
+        if not self.champion.exists(): return None
         try:
-            obj = joblib.load(self.champion)
-
-            if not isinstance(obj, dict):
-                return None
-
-            if obj.get("engine") != "numpy_softmax_v1":
-                return None
-
-            model = obj.get("model")
-
-            if model is None:
-                return None
-
-            return model
-
-        except Exception:
-            return None
+            z = np.load(self.champion); m = self._new()
+            m.weights = z["weights"]; m.bias = z["bias"]; m.means = z["means"]; m.stds = z["stds"]
+            return m
+        except Exception: return None
 
     def train(self, x):
-        required = list(FEATURES) + ["target"]
-
-        missing = [
-            c for c in required
-            if c not in x.columns
-        ]
-
-        if missing:
-            raise ValueError(
-                "Missing columns: "
-                + ", ".join(missing)
-            )
-
-        if len(x) < 500:
-            raise ValueError(
-                f"Not enough training rows: {len(x)}. "
-                "Minimum is 500."
-            )
-
-        cut = int(len(x) * 0.8)
-
-        tr = x.iloc[:cut].copy()
-        te = x.iloc[cut:].copy()
-
-        model = self._new()
-
-        model.fit(
-            tr[FEATURES].to_numpy(),
-            tr["target"].astype(int).to_numpy(),
-        )
-
-        pred = model.predict(
-            te[FEATURES].to_numpy()
-        )
-
-        actual = te["target"].astype(int).to_numpy()
-
-        accuracy = float(
-            np.mean(pred == actual)
-        )
-
-        balanced_scores = []
-
-        for cls in range(3):
-            mask = actual == cls
-
-            if np.any(mask):
-                balanced_scores.append(
-                    float(
-                        np.mean(
-                            pred[mask] == actual[mask]
-                        )
-                    )
-                )
-
-        balanced_accuracy = (
-            float(np.mean(balanced_scores))
-            if balanced_scores
-            else 0.0
-        )
-
-        stamp = time.strftime(
-            "%Y%m%d_%H%M%S"
-        )
-
-        candidate = (
-            self.models
-            / f"model_{stamp}.joblib"
-        )
-
-        package = {
-            "engine": "numpy_softmax_v1",
-            "model": model,
-            "features": FEATURES,
-            "rows": len(tr),
-            "created": stamp,
-        }
-
-        joblib.dump(
-            package,
-            candidate,
-        )
-
-        old_accuracy = -1.0
-
-        if self.meta.exists():
-            try:
-                old_accuracy = float(
-                    json.loads(
-                        self.meta.read_text(
-                            encoding="utf-8"
-                        )
-                    ).get(
-                        "accuracy",
-                        -1,
-                    )
-                )
-            except Exception:
-                old_accuracy = -1.0
-
-        accepted = accuracy >= old_accuracy
-
+        n = len(x["target"])
+        if n < 500: raise ValueError(f"Not enough training rows: {n}. Minimum is 500.")
+        X = np.column_stack([x[f] for f in FEATURES]); y = np.asarray(x["target"], dtype=int)
+        cut = max(1, int(n * 0.8)); trX, teX = X[:cut], X[cut:]; try_y, te_y = y[:cut], y[cut:]
+        m = self._new().fit(trX, try_y)
+        pred = m.predict(teX) if len(teX) else np.array([], dtype=int)
+        accuracy = float(np.mean(pred == te_y)) if len(te_y) else 0.0
+        scores = [float(np.mean(pred[te_y == c] == c)) for c in range(3) if np.any(te_y == c)]
+        balanced = float(np.mean(scores)) if scores else 0.0
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        np.savez(self.models / f"model_{stamp}.npz", weights=m.weights, bias=m.bias, means=m.means, stds=m.stds)
+        old = -1.0
+        try: old = float(json.loads(self.meta.read_text()).get("accuracy", -1.0))
+        except Exception: pass
+        accepted = accuracy >= old
         if accepted:
-            joblib.dump(
-                package,
-                self.champion,
-            )
-
-            self.meta.write_text(
-                json.dumps(
-                    {
-                        "engine": "numpy_softmax_v1",
-                        "accuracy": accuracy,
-                        "balanced_accuracy": balanced_accuracy,
-                        "rows": len(x),
-                        "created": stamp,
-                    },
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-
-        return {
-            "accuracy": accuracy,
-            "balanced_accuracy": balanced_accuracy,
-            "rows": len(x),
-            "accepted": accepted,
-        }
+            np.savez(self.champion, weights=m.weights, bias=m.bias, means=m.means, stds=m.stds)
+            self.meta.write_text(json.dumps({"engine":"numpy_softmax_v2","accuracy":accuracy,"balanced_accuracy":balanced,"rows":n,"created":stamp}, indent=2))
+        return {"accuracy": accuracy, "balanced_accuracy": balanced, "rows": n, "accepted": accepted}
 
     def predict(self, row):
-        model = self._load()
-
-        if model is None:
-            raise FileNotFoundError(
-                "No compatible trained model."
-            )
-
-        if not isinstance(row, pd.DataFrame):
-            raise TypeError(
-                "row must be a pandas DataFrame"
-            )
-
-        missing = [
-            c for c in FEATURES
-            if c not in row.columns
-        ]
-
-        if missing:
-            raise ValueError(
-                "Missing feature columns: "
-                + ", ".join(missing)
-            )
-
-        values = row[FEATURES].to_numpy()
-
-        probabilities = model.predict_proba(
-            values
-        )[0]
-
-        probabilities = np.asarray(
-            probabilities,
-            dtype=np.float64,
-        )
-
-        probabilities = np.clip(
-            probabilities,
-            0.0,
-            1.0,
-        )
-
-        total = float(
-            np.sum(probabilities)
-        )
-
-        if total > 0:
-            probabilities /= total
-
-        probs = {
-            int(cls): float(
-                probabilities[cls]
-            )
-            for cls in range(3)
-        }
-
-        cls = int(
-            np.argmax(probabilities)
-        )
-
-        return NAMES[cls], probs
+        m = self._load()
+        if m is None: raise FileNotFoundError("No trained model. Run training first.")
+        X = np.column_stack([row[f] for f in FEATURES])
+        p = m.predict_proba(X)[0]; cls = int(np.argmax(p))
+        return NAMES[cls], {i: float(p[i]) for i in range(3)}
