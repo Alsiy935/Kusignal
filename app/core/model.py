@@ -22,32 +22,25 @@ class NumpyClassifier:
         self.n_classes = n_classes
         self.weights = np.zeros((n_features, n_classes), dtype=np.float64)
         self.bias = np.zeros(n_classes, dtype=np.float64)
+        self.means = np.zeros(n_features, dtype=np.float64)
+        self.stds = np.ones(n_features, dtype=np.float64)
+        self.classes_ = np.arange(n_classes)
 
     def _softmax(self, z):
         z = z - np.max(z, axis=1, keepdims=True)
         e = np.exp(np.clip(z, -50, 50))
         return e / np.sum(e, axis=1, keepdims=True)
 
-    def fit(self, X, y, epochs=400, learning_rate=0.03,
-            l2=0.0005):
+    def fit(
+        self,
+        X,
+        y,
+        epochs=400,
+        learning_rate=0.03,
+        l2=0.0005,
+    ):
         X = np.asarray(X, dtype=np.float64)
         y = np.asarray(y, dtype=np.int64)
-
-        if X.ndim != 2:
-            raise ValueError("Features must be a 2D matrix")
-
-        if len(X) == 0:
-            raise ValueError("Empty training data")
-
-        means = np.nanmean(X, axis=0)
-        stds = np.nanstd(X, axis=0)
-
-        means = np.where(np.isfinite(means), means, 0.0)
-        stds = np.where(
-            np.isfinite(stds) & (stds > 1e-12),
-            stds,
-            1.0,
-        )
 
         X = np.nan_to_num(
             X,
@@ -56,36 +49,24 @@ class NumpyClassifier:
             neginf=0.0,
         )
 
-        X = (X - means) / stds
+        self.means = np.mean(X, axis=0)
+        self.stds = np.std(X, axis=0)
+        self.stds[self.stds < 1e-8] = 1.0
 
-        self.means = means
-        self.stds = stds
+        Xn = (X - self.means) / self.stds
 
-        self.weights = np.zeros(
-            (X.shape[1], self.n_classes),
-            dtype=np.float64,
-        )
-        self.bias = np.zeros(
-            self.n_classes,
-            dtype=np.float64,
-        )
+        Y = np.zeros((len(y), self.n_classes), dtype=np.float64)
+        Y[np.arange(len(y)), y] = 1.0
 
-        y_one = np.zeros(
-            (len(y), self.n_classes),
-            dtype=np.float64,
-        )
-
-        for i, cls in enumerate(y):
-            if 0 <= cls < self.n_classes:
-                y_one[i, cls] = 1.0
+        n = float(max(len(Xn), 1))
 
         for _ in range(epochs):
-            logits = X @ self.weights + self.bias
+            logits = Xn @ self.weights + self.bias
             probs = self._softmax(logits)
 
-            error = probs - y_one
+            error = probs - Y
 
-            grad_w = (X.T @ error) / len(X)
+            grad_w = (Xn.T @ error) / n
             grad_b = np.mean(error, axis=0)
 
             grad_w += l2 * self.weights
@@ -109,8 +90,9 @@ class NumpyClassifier:
         return (X - self.means) / self.stds
 
     def predict_proba(self, X):
-        X = self._prepare(X)
-        return self._softmax(X @ self.weights + self.bias)
+        Xn = self._prepare(X)
+        logits = Xn @ self.weights + self.bias
+        return self._softmax(logits)
 
     def predict(self, X):
         return np.argmax(self.predict_proba(X), axis=1)
@@ -120,7 +102,11 @@ class ModelManager:
     def __init__(self, root: Path):
         self.root = root
         self.models = root / "models"
-        self.models.mkdir(parents=True, exist_ok=True)
+
+        self.models.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
 
         self.champion = self.models / "champion.joblib"
         self.meta = self.models / "champion.json"
@@ -155,24 +141,23 @@ class ModelManager:
             return None
 
     def train(self, x):
-        if not isinstance(x, pd.DataFrame):
-            raise TypeError("Training data must be a pandas DataFrame")
-
-        if len(x) < 500:
-            raise ValueError(
-                f"Need at least 500 rows; got {len(x)}"
-            )
-
         required = list(FEATURES) + ["target"]
 
         missing = [
-            col for col in required
-            if col not in x.columns
+            c for c in required
+            if c not in x.columns
         ]
 
         if missing:
             raise ValueError(
-                f"Missing columns: {missing}"
+                "Missing columns: "
+                + ", ".join(missing)
+            )
+
+        if len(x) < 500:
+            raise ValueError(
+                f"Not enough training rows: {len(x)}. "
+                "Minimum is 500."
             )
 
         cut = int(len(x) * 0.8)
@@ -205,7 +190,9 @@ class ModelManager:
             if np.any(mask):
                 balanced_scores.append(
                     float(
-                        np.mean(pred[mask] == actual[mask])
+                        np.mean(
+                            pred[mask] == actual[mask]
+                        )
                     )
                 )
 
@@ -215,11 +202,13 @@ class ModelManager:
             else 0.0
         )
 
-        stamp = time.strftime("%Y%m%d_%H%M%S")
+        stamp = time.strftime(
+            "%Y%m%d_%H%M%S"
+        )
 
         candidate = (
-            self.models /
-            f"model_{stamp}.joblib"
+            self.models
+            / f"model_{stamp}.joblib"
         )
 
         package = {
@@ -230,7 +219,10 @@ class ModelManager:
             "created": stamp,
         }
 
-        joblib.dump(package, candidate)
+        joblib.dump(
+            package,
+            candidate,
+        )
 
         old_accuracy = -1.0
 
@@ -241,7 +233,10 @@ class ModelManager:
                         self.meta.read_text(
                             encoding="utf-8"
                         )
-                    ).get("accuracy", -1)
+                    ).get(
+                        "accuracy",
+                        -1,
+                    )
                 )
             except Exception:
                 old_accuracy = -1.0
@@ -285,22 +280,25 @@ class ModelManager:
 
         if not isinstance(row, pd.DataFrame):
             raise TypeError(
-                "Prediction input must be a pandas DataFrame"
+                "row must be a pandas DataFrame"
             )
 
         missing = [
-            col for col in FEATURES
-            if col not in row.columns
+            c for c in FEATURES
+            if c not in row.columns
         ]
 
         if missing:
             raise ValueError(
-                f"Missing features: {missing}"
+                "Missing feature columns: "
+                + ", ".join(missing)
             )
 
         values = row[FEATURES].to_numpy()
 
-        probabilities = model.predict_proba(values)[0]
+        probabilities = model.predict_proba(
+            values
+        )[0]
 
         probabilities = np.asarray(
             probabilities,
@@ -313,13 +311,17 @@ class ModelManager:
             1.0,
         )
 
-        total = float(np.sum(probabilities))
+        total = float(
+            np.sum(probabilities)
+        )
 
         if total > 0:
             probabilities /= total
 
         probs = {
-            int(cls): float(probabilities[cls])
+            int(cls): float(
+                probabilities[cls]
+            )
             for cls in range(3)
         }
 
