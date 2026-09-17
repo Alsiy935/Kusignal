@@ -1,9 +1,8 @@
 from os.path import join
-from pathlib import Path
 import sys
 import packaging.version
 
-from pythonforandroid.recipe import PyProjectRecipe, Recipe
+from pythonforandroid.recipe import CythonRecipe, Recipe
 from pythonforandroid.toolchain import current_directory, shprint
 
 
@@ -20,20 +19,22 @@ def is_kivy_affected_by_deadlock_issue(recipe=None, arch=None):
     return packaging.version.parse(str(get_kivy_version(recipe, arch))) < packaging.version.Version("2.2.0.dev0")
 
 
-def is_kivy_less_than_3(recipe=None, arch=None):
-    return packaging.version.parse(str(get_kivy_version(recipe, arch))) < packaging.version.Version("3.0.0.dev0")
+class KivyRecipe(CythonRecipe):
+    """Kivy 2.3.1 Android recipe.
 
+    Kivy 2.3.1 contains Cython sources (.pyx). The previous wheel-oriented path did not reliably generate the C
+    sources on the Android build host, leaving clang with missing .c files.
 
-class KivyRecipe(PyProjectRecipe):
+    CythonRecipe is the p4a build path intended for Cython packages: it
+    explicitly runs the Cython components and then builds/installs them.
+    """
+
     version = "2.3.1"
     url = "https://github.com/kivy/kivy/archive/{version}.zip"
     name = "kivy"
 
     depends = [("sdl2", "sdl3"), "pyjnius", "setuptools", "android", "libthorvg"]
 
-    # Kivy needs these runtime packages. Pin charset-normalizer to the pure
-    # Python release so p4a does not try to install the incompatible cp314
-    # Android wheel from 3.5.x.
     python_depends = [
         "certifi",
         "chardet",
@@ -46,78 +47,42 @@ class KivyRecipe(PyProjectRecipe):
 
     hostpython_prerequisites = ["cython>=0.29.1,<=3.0.12"]
 
-    # Apply the upstream Kivy Android source adjustments directly in
-    # prebuild_arch instead of relying on fragile line-numbered patch files.
-    # This avoids patch rejects when the Kivy archive changes formatting.
+    # The upstream p4a Kivy recipe applies Android source adjustments.
+    # We perform the two required source edits directly to avoid fragile
+    # line-numbered patch hunks against the Kivy 2.3.1 archive.
     patches = []
 
-    def _fix_kivy_sources(self, arch):
-        """Normalize Kivy 2.3.1 sources immediately before wheel build.
+    def prebuild_arch(self, arch):
+        super().prebuild_arch(arch)
 
-        The 2.3.1 source already contains the SDL2 deadlock fix. Some
-        p4a/Kivy build combinations can nevertheless leave the declaration
-        as ``nogil nogil``. Cython rejects that exact form. Normalize it
-        after all recipe preparation/patching and immediately before the
-        PyProjectRecipe wheel build.
-        """
-        build_dir = Path(self.get_build_dir(arch.arch))
+        build_dir = self.get_build_dir(arch.arch)
 
-        # Python 3.14 compatibility change used by p4a's no-ast-str patch.
-        parser_py = build_dir / "kivy" / "lang" / "parser.py"
-        if parser_py.exists():
-            text = parser_py.read_text(encoding="utf-8")
-            old_block = """                if isinstance(n, ast.Str):
+        # Kivy 2.3.1 disables Cython on Android. CythonRecipe needs it
+        # enabled so it can generate the C sources from Kivy's .pyx files.
+        setup_py = join(build_dir, "setup.py")
+        text = open(setup_py, encoding="utf-8").read()
+        old = "if platform in ('ios', 'android'):"
+        new = "if platform in ('ios',):"
+        if old in text:
+            text = text.replace(old, new, 1)
+        elif new not in text:
+            raise RuntimeError("Kivy setup.py Cython Android guard not found")
+        open(setup_py, "w", encoding="utf-8").write(text)
+
+        # Python 3.14 compatibility: remove the obsolete ast.Str branch.
+        parser_py = join(build_dir, "kivy", "lang", "parser.py")
+        p = open(parser_py, encoding="utf-8").read()
+        old_block = """                if isinstance(n, ast.Str):
                     # NOTE: required for python3.6
                     yield from cls.get_names_from_expression(n.s)
                 else:
                     yield from cls.get_names_from_expression(n.value)"""
-            new_block = "                yield from cls.get_names_from_expression(n.value)"
-            if old_block in text:
-                text = text.replace(old_block, new_block, 1)
-                parser_py.write_text(text, encoding="utf-8")
-
-        # Never allow the invalid duplicate Cython modifier to reach the
-        # wheel build. Keep exactly one ``nogil`` on the SDL declaration.
-        source_root = build_dir / "kivy"
-        for path in source_root.rglob("*"):
-            if path.suffix not in {".pyx", ".pxd", ".pxi"} or not path.is_file():
-                continue
-            text = path.read_text(encoding="utf-8")
-            fixed = text.replace("nogil nogil", "nogil")
-            if fixed != text:
-                path.write_text(fixed, encoding="utf-8")
-
-        sdl_pxi = source_root / "lib" / "sdl2.pxi"
-        if sdl_pxi.exists():
-            text = sdl_pxi.read_text(encoding="utf-8")
-            text = text.replace(
-                "SDL_GL_SwapWindow(SDL_Window * window) nogil nogil",
-                "SDL_GL_SwapWindow(SDL_Window * window) nogil",
-            )
-            sdl_pxi.write_text(text, encoding="utf-8")
-
-        # Fail early with a precise message instead of a long Cython build
-        # if another preparation step reintroduces the duplicate modifier.
-        leftovers = []
-        for path in source_root.rglob("*"):
-            if path.suffix in {".pyx", ".pxd", ".pxi"} and path.is_file():
-                text = path.read_text(encoding="utf-8")
-                if "nogil nogil" in text:
-                    leftovers.append(str(path))
-        if leftovers:
-            raise RuntimeError("Duplicate Cython 'nogil nogil' remains in: " + ", ".join(leftovers))
-
-    def prebuild_arch(self, arch):
-        # Recipe.py dispatches this to prebuild_<arch>; keep the superclass
-        # call so the normal p4a preparation remains intact.
-        super().prebuild_arch(arch)
-
-    def build_arch(self, arch):
-        # This runs after p4a recipe patching and immediately before
-        # PyProjectRecipe invokes `python -m build --wheel`.
-        self._fix_kivy_sources(arch)
-        super().build_arch(arch)
-
+        new_block = "                yield from cls.get_names_from_expression(n.value)"
+        if old_block in p:
+            p = p.replace(old_block, new_block, 1)
+            open(parser_py, "w", encoding="utf-8").write(p)
+        elif "yield from cls.get_names_from_expression(n.value)" not in p:
+            raise RuntimeError("Kivy parser.py AST compatibility block not found")
 
     @property
     def need_stl_shared(self):
@@ -133,12 +98,7 @@ class KivyRecipe(PyProjectRecipe):
         env["LDSHARED"] = env["CC"] + " -shared"
         env["LIBLINK"] = "NOTNONE"
         env["NDKPLATFORM"] = "NOTNONE"
-        if not is_kivy_less_than_3(self, arch):
-            env["KIVY_CROSS_PLATFORM"] = "android"
-        env["KIVY_THORVG_LIB_DIR"] = self.ctx.get_libs_dir(arch.arch)
-        env["KIVY_THORVG_INCLUDE_DIR"] = join(
-            Recipe.get_recipe("libthorvg", self.ctx).get_include_dir(arch), "thorvg-1"
-        )
+
         if "sdl2" in self.ctx.recipe_build_order:
             env["USE_SDL2"] = "1"
             env["KIVY_SPLIT_EXAMPLES"] = "1"
@@ -150,19 +110,13 @@ class KivyRecipe(PyProjectRecipe):
                 *sdl2_mixer_recipe.get_include_dirs(arch),
                 join(self.ctx.bootstrap.build_dir, "jni", "SDL2_ttf"),
             ])
-        if "sdl3" in self.ctx.recipe_build_order:
-            sdl3_mixer_recipe = self.get_recipe("sdl3_mixer", self.ctx)
-            sdl3_image_recipe = self.get_recipe("sdl3_image", self.ctx)
-            sdl3_ttf_recipe = self.get_recipe("sdl3_ttf", self.ctx)
-            sdl3_recipe = self.get_recipe("sdl3", self.ctx)
-            env["USE_SDL3"] = "1"
-            env["KIVY_SPLIT_EXAMPLES"] = "1"
-            env["KIVY_SDL3_PATH"] = ":".join([
-                *sdl3_mixer_recipe.get_include_dirs(arch),
-                *sdl3_image_recipe.get_include_dirs(arch),
-                *sdl3_ttf_recipe.get_include_dirs(arch),
-                *sdl3_recipe.get_include_dirs(arch),
-            ])
+
+        if "android" in self.ctx.recipe_build_order:
+            env["KIVY_ANDROID_LIBS"] = join(
+                Recipe.get_recipe("android", self.ctx).get_build_dir(arch.arch),
+                "android-build",
+            )
+
         return env
 
 
