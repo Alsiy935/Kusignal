@@ -16,18 +16,95 @@ from core.engine import LearningEngine
 
 class UI(BoxLayout):
     def __init__(self, engine, **kw):
-        super().__init__(orientation="vertical", padding=(18, 12, 18, 28), spacing=8, **kw)
+        super().__init__(orientation="vertical", padding=(18, 8, 18, 12), spacing=0, **kw)
         self.engine = engine
-        self.info = Label(text="SelfLearningTrader Ultimate\nГотов.", font_size="17sp", halign="center", valign="middle", size_hint_y=None, height=80)
-        self.info.bind(size=lambda obj, val: setattr(obj, "text_size", (obj.width, None)))
-        self.add_widget(self.info)
-        scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
-        box = BoxLayout(orientation="vertical", spacing=9, padding=(0, 4), size_hint_y=None)
-        box.bind(minimum_height=box.setter("height"))
-        for title, fn in [("СИНХРОНИЗИРОВАТЬ И ОБУЧИТЬ", self.train), ("LIVE-ПРОГНОЗ", self.predict), ("ЦИКЛ САМООБУЧЕНИЯ", self.learn), ("ПРОВЕРИТЬ СТАРЫЕ ПРОГНОЗЫ", self.resolve)]:
-            b = Button(text=title, size_hint_y=None, height=62)
-            b.bind(on_release=fn); box.add_widget(b)
-        scroll.add_widget(box); self.add_widget(scroll)
+        self.menu_open = False
+
+        # The whole application content is scrollable. This is important on
+        # small phone screens when logs/results become longer than the screen.
+        self.scroll = ScrollView(
+            do_scroll_x=False,
+            do_scroll_y=True,
+            bar_width="5dp",
+            scroll_type=["bars", "content"],
+        )
+        self.content = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            spacing=6,
+            padding=(0, 0, 0, 12),
+        )
+        self.content.bind(minimum_height=self.content.setter("height"))
+        self.scroll.add_widget(self.content)
+        self.add_widget(self.scroll)
+
+        self.info = Label(
+            text="SelfLearningTrader Ultimate\nГотов.",
+            font_size="17sp",
+            halign="center",
+            valign="top",
+            size_hint_y=None,
+            padding=(4, 8),
+        )
+        # Let the label grow vertically with its text instead of clipping it.
+        self.info.bind(width=lambda obj, val: setattr(obj, "text_size", (max(0, val - 8), None)))
+        self.info.bind(texture_size=lambda obj, val: setattr(obj, "height", max(80, val[1] + 16)))
+        self.content.add_widget(self.info)
+
+        # Compact top-right menu. The four large action buttons are hidden
+        # until the user taps the vertical-ellipsis button.
+        menu_bar = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=46,
+            padding=(0, 0, 0, 0),
+        )
+        menu_bar.add_widget(Label(size_hint_x=1))
+        self.menu_button = Button(
+            text="⋮",
+            font_size="30sp",
+            size_hint=(None, None),
+            size=(52, 46),
+            background_normal="",
+        )
+        self.menu_button.bind(on_release=self.toggle_menu)
+        menu_bar.add_widget(self.menu_button)
+        self.content.add_widget(menu_bar)
+
+        self.actions = BoxLayout(
+            orientation="vertical",
+            spacing=6,
+            padding=(0, 0),
+            size_hint_y=None,
+            height=0,
+            opacity=0,
+        )
+        self.actions.disabled = True
+
+        for title, fn in [
+            ("СИНХРОНИЗИРОВАТЬ И ОБУЧИТЬ", self.train),
+            ("LIVE-ПРОГНОЗ", self.predict),
+            ("ЦИКЛ САМООБУЧЕНИЯ", self.learn),
+            ("ПРОВЕРИТЬ СТАРЫЕ ПРОГНОЗЫ", self.resolve),
+        ]:
+            b = Button(text=title, size_hint_y=None, height=56)
+            b.bind(on_release=fn)
+            self.actions.add_widget(b)
+
+        self.content.add_widget(self.actions)
+
+    def toggle_menu(self, _):
+        self.menu_open = not self.menu_open
+        if self.menu_open:
+            self.actions.height = len(self.actions.children) * 56 + max(0, len(self.actions.children) - 1) * 6
+            self.actions.opacity = 1
+            self.actions.disabled = False
+            self.menu_button.text = "×"
+        else:
+            self.actions.opacity = 0
+            self.actions.height = 0
+            self.actions.disabled = True
+            self.menu_button.text = "⋮"
 
     def worker(self, fn):
         self.info.text = "Работаю...\nНе закрывайте приложение."
