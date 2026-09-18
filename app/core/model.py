@@ -47,12 +47,29 @@ class ModelManager:
     def _new(self): return NumpyClassifier(len(FEATURES), 3)
 
     def _load(self):
-        if not self.champion.exists(): return None
+        if not self.champion.exists():
+            return None
         try:
-            z = np.load(self.champion); m = self._new()
-            m.weights = z["weights"]; m.bias = z["bias"]; m.means = z["means"]; m.stds = z["stds"]
+            z = np.load(self.champion)
+            m = self._new()
+            weights = np.asarray(z["weights"], dtype=float)
+            bias = np.asarray(z["bias"], dtype=float)
+            means = np.asarray(z["means"], dtype=float)
+            stds = np.asarray(z["stds"], dtype=float)
+            # Do not use a model produced by an older app version with a
+            # different feature vector. That used to cause errors such as
+            # "operands could not be broadcast together with shapes (33,) (100,)".
+            expected = (len(FEATURES), 3)
+            if weights.shape != expected or bias.shape != (3,) or means.shape != (len(FEATURES),) or stds.shape != (len(FEATURES),):
+                return None
+            if not (np.all(np.isfinite(weights)) and np.all(np.isfinite(bias)) and
+                    np.all(np.isfinite(means)) and np.all(np.isfinite(stds))):
+                return None
+            stds = np.where(np.abs(stds) < 1e-8, 1.0, stds)
+            m.weights = weights; m.bias = bias; m.means = means; m.stds = stds
             return m
-        except Exception: return None
+        except Exception:
+            return None
 
     def train(self, x):
         n = len(x["target"])
@@ -72,12 +89,26 @@ class ModelManager:
         accepted = accuracy >= old
         if accepted:
             np.savez(self.champion, weights=m.weights, bias=m.bias, means=m.means, stds=m.stds)
-            self.meta.write_text(json.dumps({"engine":"numpy_softmax_v2","accuracy":accuracy,"balanced_accuracy":balanced,"rows":n,"created":stamp}, indent=2))
+            self.meta.write_text(json.dumps({
+                "engine":"numpy_softmax_v3",
+                "accuracy":accuracy,
+                "balanced_accuracy":balanced,
+                "rows":n,
+                "created":stamp,
+                "feature_count":len(FEATURES),
+                "features":FEATURES,
+            }, indent=2))
         return {"accuracy": accuracy, "balanced_accuracy": balanced, "rows": n, "accepted": accepted}
 
     def predict(self, row):
         m = self._load()
-        if m is None: raise FileNotFoundError("No trained model. Run training first.")
-        X = np.column_stack([row[f] for f in FEATURES])
+        if m is None:
+            raise FileNotFoundError("Нет совместимой обученной модели. Сначала нажмите «СИНХРОНИЗИРОВАТЬ И ОБУЧИТЬ».")
+        try:
+            X = np.column_stack([np.asarray(row[f], dtype=float).reshape(-1) for f in FEATURES])
+        except KeyError as e:
+            raise ValueError(f"Отсутствует признак модели: {e.args[0]}") from e
+        if X.shape[1] != len(FEATURES):
+            raise ValueError(f"Неверное число признаков: {X.shape[1]}, требуется {len(FEATURES)}")
         p = m.predict_proba(X)[0]; cls = int(np.argmax(p))
         return NAMES[cls], {i: float(p[i]) for i in range(3)}
