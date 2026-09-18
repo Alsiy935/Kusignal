@@ -15,7 +15,7 @@ class LearningEngine:
         self.pending = self.logs / "pending.json"
 
     def collect(self):
-        return {tf: self.exchange.candles(tf, min(self.cfg.get("history_limit", 1500), 1000)) for tf in self.cfg["timeframes"]}
+        return {tf: self.exchange.candles(tf, int(self.cfg.get("history_limit", 5000))) for tf in self.cfg["timeframes"]}
 
     def build_training(self, frames):
         base = add_features(frames["5min"])

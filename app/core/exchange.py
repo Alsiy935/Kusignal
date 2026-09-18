@@ -43,43 +43,67 @@ class KuCoin:
         return data.get("data", data)
 
     def candles(self, tf, limit=300):
-        raw = self._get(
-            "/api/v1/market/candles",
-            {
+        """Fetch historical candles with time pagination.
+
+        KuCoin returns at most 1500 klines per request.  A single request
+        can therefore silently leave the app with only a small training
+        sample.  We page backwards by endAt until the requested number of
+        unique candles is collected.
+        """
+        wanted = max(1, int(limit))
+        page_size = min(wanted, 1500)
+        all_rows = []
+        end_at = None
+        seen = set()
+
+        for _ in range((wanted + 1499) // 1500 + 2):
+            params = {
                 "symbol": self.symbol,
                 "type": tf,
-                "limit": min(int(limit), 1500),
-            },
-        )
+                "limit": page_size,
+            }
+            if end_at is not None:
+                params["endAt"] = int(end_at)
 
-        rows = []
-        for r in raw:
-            if len(r) < 7:
-                continue
-            try:
-                rows.append({
-                    "time": int(float(r[0])),
-                    "open": float(r[1]),
-                    "close": float(r[2]),
-                    "high": float(r[3]),
-                    "low": float(r[4]),
-                    "volume": float(r[5]),
-                    "turnover": float(r[6]),
-                })
-            except (TypeError, ValueError):
-                continue
+            raw = self._get("/api/v1/market/candles", params)
+            if not raw:
+                break
 
-        rows.sort(key=lambda x: x["time"])
-        unique = []
-        seen = set()
-        for row in rows:
-            if row["time"] not in seen:
-                seen.add(row["time"])
-                unique.append(row)
+            before = len(all_rows)
+            oldest = None
+            for r in raw:
+                if len(r) < 7:
+                    continue
+                try:
+                    ts = int(float(r[0]))
+                    row = {
+                        "time": ts,
+                        "open": float(r[1]),
+                        "close": float(r[2]),
+                        "high": float(r[3]),
+                        "low": float(r[4]),
+                        "volume": float(r[5]),
+                        "turnover": float(r[6]),
+                    }
+                except (TypeError, ValueError):
+                    continue
+                oldest = ts if oldest is None else min(oldest, ts)
+                if ts not in seen:
+                    seen.add(ts)
+                    all_rows.append(row)
 
-        if not unique:
+            if len(all_rows) >= wanted:
+                break
+            if oldest is None or len(all_rows) == before:
+                break
+            end_at = oldest - 1
+
+        all_rows.sort(key=lambda x: x["time"])
+        if len(all_rows) > wanted:
+            all_rows = all_rows[-wanted:]
+        if not all_rows:
             raise RuntimeError(f"KuCoin returned no candles for {tf}")
-        return unique
+        return all_rows
 
     def orderbook_imbalance(self):
         raw = self._get(

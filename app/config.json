@@ -7,7 +7,7 @@
     "4hour",
     "1day"
   ],
-  "history_limit": 1000,
+  "history_limit": 5000,
   "horizon_bars": 4,
   "long_threshold": 0.003,
   "short_threshold": -0.003,
