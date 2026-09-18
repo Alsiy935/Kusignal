@@ -21,10 +21,41 @@ class LearningEngine:
         base = add_features(frames["5min"])
         x = align_mtf(base, {k:v for k,v in frames.items() if k != "5min"})
         x = make_labels(x, self.cfg["horizon_bars"], self.cfg["long_threshold"], self.cfg["short_threshold"])
-        for k in ["book_imbalance","oi_change","funding","liquidation_bias"]: x[k] = np.zeros(len(x))
-        good = np.ones(len(x), dtype=bool)
-        for f in FEATURES + ["target"]: good &= np.isfinite(x[f])
-        return {k: v[good] for k,v in x.items()}
+        base_len = len(x["time"])
+        if base_len == 0:
+            raise ValueError("Нет базовых 5min свечей для обучения")
+
+        # Hard guarantee: every training column must have exactly the same
+        # number of rows as the 5min base frame.  Older builds could leave
+        # one MTF/market column at its source length (for example 33) while
+        # the base frame had another length (for example 100), which then
+        # crashed inside the in-place boolean mask operation.
+        for f in FEATURES:
+            arr = np.asarray(x.get(f, []), dtype=float).reshape(-1)
+            if arr.size != base_len:
+                raise ValueError(
+                    f"Несовпадение длины признака {f}: {arr.size} вместо {base_len}. "
+                    "Данные этого таймфрейма не выровнены."
+                )
+            x[f] = arr
+
+        target = np.asarray(x.get("target", []), dtype=float).reshape(-1)
+        if target.size != base_len:
+            raise ValueError(
+                f"Несовпадение длины target: {target.size} вместо {base_len}"
+            )
+        x["target"] = target
+
+        # Market features are constant over the current training snapshot.
+        # Fill them only after the length check above, so they can never
+        # introduce a second row count.
+        for k in ["book_imbalance","oi_change","funding","liquidation_bias"]:
+            x[k] = np.zeros(base_len, dtype=float)
+
+        good = np.ones(base_len, dtype=bool)
+        for f in FEATURES + ["target"]:
+            good &= np.isfinite(x[f])
+        return {k: np.asarray(v)[good] if np.asarray(v).ndim == 1 and np.asarray(v).size == base_len else v for k,v in x.items()}
 
     def train_from_fresh(self):
         return self.mm.train(self.build_training(self.collect()))
