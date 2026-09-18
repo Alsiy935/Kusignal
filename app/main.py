@@ -21,6 +21,8 @@ class UI(BoxLayout):
         # edge-to-edge. Keep a small internal margin for a clean header.
         super().__init__(orientation="vertical", padding=(dp(12), dp(10), dp(12), dp(10)), spacing=dp(6), **kw)
         Window.fullscreen = False
+        # Keep the app content below Android system bars.
+        Window.clearcolor = (0, 0, 0, 1)
         self.engine = engine
         self.menu_open = False
 

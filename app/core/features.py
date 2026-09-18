@@ -82,31 +82,59 @@ def add_features(rows):
 
 
 def _nearest_values(target_times, source, names):
-    st = source["time"]; idx = np.searchsorted(st, target_times, side="right") - 1
-    valid = idx >= 0; idx = np.maximum(idx, 0)
+    """Align lower-frequency features to target timestamps safely.
+
+    Never index a source feature array with an index that belongs to a
+    different-sized array.  KuCoin may return different history lengths for
+    each timeframe, and source timestamps are explicitly sorted first.
+    """
+    target_times = np.asarray(target_times, dtype=np.int64).reshape(-1)
+    st = np.asarray(source.get("time", []), dtype=np.int64).reshape(-1)
+    if target_times.size == 0:
+        return {name: np.empty(0, dtype=float) for name in names}
+    if st.size == 0:
+        return {name: np.full(target_times.size, np.nan, dtype=float) for name in names}
+
+    order = np.argsort(st, kind="stable")
+    st = st[order]
+    idx = np.searchsorted(st, target_times, side="right") - 1
+    valid = idx >= 0
+    idx = np.clip(idx, 0, st.size - 1)
+
     result = {}
     for name in names:
-        a = np.full(len(target_times), np.nan)
-        a[valid] = source[name][idx[valid]]
+        src = np.asarray(source.get(name, []), dtype=float).reshape(-1)
+        if src.size != order.size:
+            raise ValueError(
+                f"Некорректная длина признака {name}: {src.size}, "
+                f"ожидалось {order.size}"
+            )
+        src = src[order]
+        a = np.full(target_times.size, np.nan, dtype=float)
+        a[valid] = src[idx[valid]]
         result[name] = a
     return result
-
 
 def align_mtf(base, frames):
     x = {k: np.array(v, copy=True) for k, v in base.items()}
     mapping = {"15min": "15", "1hour": "1h", "4hour": "4h", "1day": "1d"}
-    for key, y in frames.items():
-        if key not in mapping:
-            continue
-        z = add_features(y)
-        vals = _nearest_values(x["time"], z, ["rsi", "trend", "volz"])
-        suf = mapping[key]
+    # Every configured MTF feature is always created with exactly the same
+    # length as the 5min base frame, even if KuCoin returns a short/empty
+    # history for one timeframe.
+    for key, suf in mapping.items():
+        y = frames.get(key)
+        if y:
+            z = add_features(y)
+            vals = _nearest_values(x["time"], z, ["rsi", "trend", "volz"])
+        else:
+            vals = {name: np.full(len(x["time"]), np.nan, dtype=float)
+                    for name in ("rsi", "trend", "volz")}
         x[f"rsi_{suf}"] = vals["rsi"]
         x[f"trend_{suf}"] = vals["trend"]
         x[f"volz_{suf}"] = vals["volz"]
     for c in MARKET_FEATURES:
         if c not in x:
-            x[c] = np.zeros(len(x), dtype=float)
+            x[c] = np.zeros(len(x["time"]), dtype=float)
     return x
 
 

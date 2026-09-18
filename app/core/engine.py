@@ -15,7 +15,7 @@ class LearningEngine:
         self.pending = self.logs / "pending.json"
 
     def collect(self):
-        return {tf: self.exchange.candles(tf, min(self.cfg.get("history_limit", 1500), 500)) for tf in self.cfg["timeframes"]}
+        return {tf: self.exchange.candles(tf, min(self.cfg.get("history_limit", 1500), 1000)) for tf in self.cfg["timeframes"]}
 
     def build_training(self, frames):
         base = add_features(frames["5min"])
@@ -30,12 +30,30 @@ class LearningEngine:
         return self.mm.train(self.build_training(self.collect()))
 
     def live_row(self):
-        frames = self.collect(); base = add_features(frames["5min"])
-        x = align_mtf(base, {k:v for k,v in frames.items() if k != "5min"})
+        frames = self.collect()
+        base = add_features(frames["5min"])
+        x = align_mtf(base, {k: v for k, v in frames.items() if k != "5min"})
         metrics = self.exchange.current_market_metrics()
-        for k,v in metrics.items(): x[k] = np.full(len(x), float(v))
-        i = len(x["time"]) - 1
-        return {k: np.asarray([x[k][i]]) for k in x}
+        base_len = len(x["time"])
+        for k, v in metrics.items():
+            x[k] = np.full(base_len, float(v), dtype=float)
+
+        # Every live feature must have exactly the same row count as the
+        # base timeframe before selecting the latest row.  This prevents a
+        # short MTF history from ever producing an out-of-bounds index.
+        for f in FEATURES:
+            if f not in x:
+                raise ValueError(f"Отсутствует признак: {f}")
+            arr = np.asarray(x[f]).reshape(-1)
+            if arr.size != base_len:
+                raise ValueError(
+                    f"Некорректная длина признака {f}: {arr.size}, "
+                    f"ожидалось {base_len}"
+                )
+        if base_len == 0:
+            raise ValueError("KuCoin не вернул свечи 5min")
+        i = base_len - 1
+        return {k: np.asarray([x[k][i]], dtype=float) if k != "time" else np.asarray([x[k][i]], dtype=np.int64) for k in x}
 
     def predict_and_store(self):
         row = self.live_row(); pred, probs = self.mm.predict(row)

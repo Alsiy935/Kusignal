@@ -41,7 +41,7 @@ class NumpyClassifier:
 
 class ModelManager:
     def __init__(self, root: Path):
-        self.models = Path(root) / "models"; self.models.mkdir(parents=True, exist_ok=True)
+        self.models = Path(root) / "models_v5_30f"; self.models.mkdir(parents=True, exist_ok=True)
         self.champion = self.models / "champion.npz"; self.meta = self.models / "champion.json"
 
     def _new(self): return NumpyClassifier(len(FEATURES), 3)
@@ -62,6 +62,13 @@ class ModelManager:
             expected = (len(FEATURES), 3)
             if weights.shape != expected or bias.shape != (3,) or means.shape != (len(FEATURES),) or stds.shape != (len(FEATURES),):
                 return None
+            if self.meta.exists():
+                try:
+                    meta = json.loads(self.meta.read_text())
+                    if meta.get("engine") != "numpy_softmax_v5_30f" or int(meta.get("feature_count", -1)) != len(FEATURES):
+                        return None
+                except Exception:
+                    return None
             if not (np.all(np.isfinite(weights)) and np.all(np.isfinite(bias)) and
                     np.all(np.isfinite(means)) and np.all(np.isfinite(stds))):
                 return None
@@ -90,7 +97,7 @@ class ModelManager:
         if accepted:
             np.savez(self.champion, weights=m.weights, bias=m.bias, means=m.means, stds=m.stds)
             self.meta.write_text(json.dumps({
-                "engine":"numpy_softmax_v3",
+                "engine":"numpy_softmax_v5_30f",
                 "accuracy":accuracy,
                 "balanced_accuracy":balanced,
                 "rows":n,
