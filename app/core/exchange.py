@@ -1,4 +1,10 @@
-import json, ssl, time, urllib.parse, urllib.request
+import json, os, ssl, time, urllib.parse, urllib.request
+import certifi
+
+# Android often has no usable OpenSSL CA path for Python. Use the bundled Mozilla CA set.
+_CA_BUNDLE = certifi.where()
+os.environ.setdefault("SSL_CERT_FILE", _CA_BUNDLE)
+os.environ.setdefault("REQUESTS_CA_BUNDLE", _CA_BUNDLE)
 import numpy as np
 
 BASE='https://api.kucoin.com'
@@ -8,7 +14,9 @@ TF_API={'5min':'5min','15min':'15min','1hour':'1hour','4hour':'4hour','1day':'1d
 class KuCoin:
     def __init__(self,symbol='XBTUSDTM',timeout=25):
         self.timeout=timeout
-        self.ctx=ssl.create_default_context()
+        self.ctx=ssl.create_default_context(cafile=_CA_BUNDLE)
+        self.ctx.check_hostname=True
+        self.ctx.verify_mode=ssl.CERT_REQUIRED
         self.set_symbol(symbol)
 
     def set_symbol(self,symbol):

@@ -62,7 +62,7 @@ class LearningEngine:
         if pred=='SHORT': return price,price+1.2*atr,price-1.8*atr,price-2.7*atr,price-3.6*atr
         return price,price-1.0*atr,price,price,price
     def predict_and_store(self):
-        row=self.live_row(); pred,probs=self.mm.predict(row); entry,sl,tp1,tp2,tp3=self._signal_levels(row,pred); ts=int(row['time'][0]); item={'id':str(int(time.time()*1000)),'symbol':self.exchange.futures_symbol,'time':ts,'price':float(row['close'][0]),'prediction':pred,'p_short':probs[0],'p_wait':probs[1],'p_long':probs[2],'entry':entry,'sl':sl,'tp1':tp1,'tp2':tp2,'tp3':tp3,'horizon_bars':int(self.cfg['horizon_bars']),'resolved':0}
+        row=self.live_row(); pred,probs=self.mm.predict(row); entry,sl,tp1,tp2,tp3=self._signal_levels(row,pred); ts=int(row['time'][0]); item={'id':str(int(time.time()*1000)),'symbol':self.exchange.symbol,'exchange_symbol':self.exchange.futures_symbol,'contract':self.exchange.futures_symbol,'time':ts,'price':float(row['close'][0]),'prediction':pred,'p_short':probs[0],'p_wait':probs[1],'p_long':probs[2],'entry':entry,'sl':sl,'tp1':tp1,'tp2':tp2,'tp3':tp3,'horizon_bars':int(self.cfg['horizon_bars']),'resolved':0}
         item['features']={f:float(row[f][0]) for f in FEATURES}; self._append_json(self.predictions,item); self._append_json(self.pending,item); return item
     def _read_json(self,path):
         try:return json.loads(path.read_text()) if path.exists() else []
@@ -128,6 +128,7 @@ class LearningEngine:
                     train=None
                 resolved=self.resolve_pending()
                 r=self.predict_and_store()
+                r['contract']=item['contract']
                 r['trained_now']=bool(train)
                 r['resolved_now']=resolved
                 results.append(r)

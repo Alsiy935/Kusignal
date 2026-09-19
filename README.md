@@ -67,3 +67,9 @@ Android может ограничивать бесконечную фонову�
 
 
 Build V4: ARM64, Kivy 2.3.1, direct robust source adjustments in the local p4a recipe, no fragile patch hunks.
+
+
+## SSL / Android
+The HTTP client explicitly uses the bundled certifi CA bundle because Android Python builds can otherwise fail with CERTIFICATE_VERIFY_FAILED. Certificate verification remains enabled.
+## Position calculator
+The calculator supports LONG/SHORT, leverage, Cross/Isolated, account balance, position margin, Entry/SL/TP, MMR, liquidation fee and taker fee. Liquidation is shown as a KuCoin reference calculation, not a guarantee.
