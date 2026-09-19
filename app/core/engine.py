@@ -162,31 +162,53 @@ class LearningEngine:
             self.cfg['history_limit']=old_limit
 
     def scan_all(self, progress=None):
-        symbols=self.exchange.active_symbols(); original=self.exchange.futures_symbol
-        quick=[]; errors=0; total=len(symbols)
-        # Phase 1: inspect the whole market cheaply.
+        # Scan engine is isolated from the UI engine. It has its own exchange/model
+        # state so a running scan cannot change the coin selected by the user.
+        from .exchange import KuCoin
+        scan_cfg=dict(self.cfg)
+        scan_exchange=KuCoin(self.exchange.futures_symbol, timeout=self.exchange.timeout)
+        scan_engine=LearningEngine(self.root, scan_exchange, scan_cfg)
+        symbols=scan_exchange.active_symbols()
+        total=len(symbols)
+        quick=[]; errors=0
+        seen_contracts=set()
         for i,item in enumerate(symbols):
+            contract=item['contract']
+            if contract in seen_contracts:
+                continue
+            seen_contracts.add(contract)
             try:
-                q=self._quick_candidate(item); quick.append(q)
+                q=scan_engine._quick_candidate(item)
+                quick.append(q)
                 if progress: progress(i+1,total,item['display'],q,None,phase='PRESCAN')
             except Exception as e:
                 errors+=1
                 if progress: progress(i+1,total,item['display'],None,{'error':str(e)},phase='PRESCAN')
-        # Keep a wider finalist set so the final TOP-5 is not dominated by one metric.
-        quick.sort(key=lambda r:(r['quality'],abs(r['quick_score']),r['turnover24h']),reverse=True)
-        finalists=quick[:12]
-        results=[]
+
+        # Do not pretend that all REST failures are candidates. Only contracts with
+        # enough real candles can enter the finalist stage. Keep a broad finalist set
+        # so one technical score cannot dominate the TOP-5.
+        quick_by_contract={r['contract']:r for r in quick}
+        quick=list(quick_by_contract.values())
+        quick.sort(key=lambda r:(r.get('quality',0),abs(r.get('quick_score',0)),r.get('turnover24h',0)),reverse=True)
+        finalists=quick[:20]
+        results=[]; model_errors=0
         for j,item in enumerate(finalists):
             try:
-                r=self._scan_train_and_predict({'contract':item['contract'],'display':item['symbol'],'turnover':item['turnover24h']},800)
+                r=scan_engine._scan_train_and_predict({'contract':item['contract'],'display':item['symbol'],'turnover':item['turnover24h']},800)
                 r['quick_score']=item['quick_score']; r['prescan_quality']=item['quality']; r['scan_index']=j+1
                 results.append(r)
                 if progress: progress(j+1,len(finalists),item['symbol'],r,None,phase='MODEL')
             except Exception as e:
-                errors+=1
+                model_errors+=1
                 if progress: progress(j+1,len(finalists),item['symbol'],None,{'error':str(e)},phase='MODEL')
-        self.set_symbol(original)
-        # Rank by directional edge, model confidence and liquidity, while keeping WAIT below trade candidates.
-        results.sort(key=lambda r:(r.get('prediction')!='WAIT',r.get('edge_score',-9),r.get('quality',0),r.get('turnover24h',0)),reverse=True)
-        return results, total, len(quick), errors
 
+        # One result per contract. A symbol may never occupy two TOP-5 slots.
+        unique={}
+        for r in results:
+            c=r.get('contract') or r.get('exchange_symbol')
+            if c and c not in unique:
+                unique[c]=r
+        results=list(unique.values())
+        results.sort(key=lambda r:(r.get('prediction')!='WAIT',r.get('edge_score',-9),r.get('quality',0),r.get('turnover24h',0)),reverse=True)
+        return results,total,len(quick),errors+model_errors

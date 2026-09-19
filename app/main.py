@@ -19,15 +19,22 @@ from core.calculator import calculate_position
 class UI(BoxLayout):
     def __init__(self,engine,**kw):
         super().__init__(orientation='vertical',padding=(dp(12),dp(10)),spacing=dp(6),**kw)
-        self.engine=engine; self._last_prediction=None; self._scan_rows=[]; Window.fullscreen=False
+        self.engine=engine; self._last_prediction=None; self._scan_rows=[]; self._detail_open=False; self._ui_scale=1.0; Window.fullscreen=False
         header=BoxLayout(size_hint_y=None,height=dp(52))
         self.title=Label(text='SelfLearningTrader Ultimate',font_size='18sp'); header.add_widget(self.title)
-        self.menu=Button(text='...',size_hint_x=None,width=dp(52)); self.menu.bind(on_release=self.toggle); header.add_widget(self.menu); self.add_widget(header)
+        self.menu=Button(text='...',size_hint_x=None,width=dp(52)); self.menu.bind(on_release=self.toggle); header.add_widget(self.menu); self.fullscreen_btn=Button(text='⛶',size_hint_x=None,width=dp(52)); self.fullscreen_btn.bind(on_release=self.toggle_fullscreen); header.add_widget(self.fullscreen_btn); self.add_widget(header)
         selector=BoxLayout(size_hint_y=None,height=dp(52),spacing=dp(6))
-        self.symbol_spinner=Spinner(text=self.engine.exchange.symbol,values=(self.engine.exchange.symbol,),size_hint_x=.72)
-        self.symbol_spinner.bind(text=self.select_symbol); selector.add_widget(self.symbol_spinner)
+        self.symbol_search=TextInput(text='',hint_text='Поиск монеты: BTC, ETH, SOL...',multiline=False,size_hint_x=.72)
+        self.symbol_search.bind(text=self.filter_symbols)
+        selector.add_widget(self.symbol_search)
         refresh=Button(text='↻',size_hint_x=None,width=dp(52)); refresh.bind(on_release=self.refresh_symbols); selector.add_widget(refresh); self.add_widget(selector)
-        self.scroll=ScrollView(do_scroll_x=False); self.content=BoxLayout(orientation='vertical',size_hint_y=None,spacing=dp(6)); self.content.bind(minimum_height=self.content.setter('height')); self.scroll.add_widget(self.content); self.add_widget(self.scroll)
+        self.selected_label=Label(text='Выбрано: —',font_size='14sp',halign='left',valign='middle',size_hint_y=None,height=dp(30))
+        self.selected_label.bind(size=lambda o,v:setattr(o,'text_size',(max(dp(100),v[0]-dp(4)),None)))
+        self.add_widget(self.selected_label)
+        self.scroll=ScrollView(do_scroll_x=True, do_scroll_y=True, bar_width=dp(5), scroll_timeout=250); self.content=BoxLayout(orientation='vertical',size_hint_y=None,size_hint_x=None,spacing=dp(6)); self.content.bind(minimum_height=self.content.setter('height')); self.scroll.add_widget(self.content); self.add_widget(self.scroll)
+        self.symbol_results=BoxLayout(orientation='vertical',spacing=dp(3),size_hint_y=None,height=0)
+        self.symbol_results.bind(minimum_height=self.symbol_results.setter('height'))
+        self.content.add_widget(self.symbol_results)
         self.info=Label(text='Загрузка списка монет...',font_size='16sp',halign='left',valign='top',size_hint_y=None)
         self.info.bind(width=lambda o,v:setattr(o,'text_size',(max(dp(100),v-dp(4)),None)))
         self.info.bind(texture_size=lambda o,v:setattr(o,'height',max(dp(120),v[1]+dp(20)))); self.content.add_widget(self.info)
@@ -43,19 +50,52 @@ class UI(BoxLayout):
         Clock.schedule_once(lambda dt:self.refresh_symbols(None),.2)
 
     def _on_window_resize(self, *args):
-        # Keep every text block readable in both portrait and landscape.
-        w=max(dp(220), self.width-dp(24))
+        # Responsive layout: never clip the calculator on narrow Android screens.
+        w=max(dp(260), self.width-dp(20))
         self.content.width=w
         self.info.width=w
         self.results_box.width=w
         self.calc_box.width=w
+        self.symbol_results.width=w
         for child in self.results_box.children:
             child.width=w
-            if hasattr(child,'text_size'): child.text_size=(w-dp(20),None)
-        for child in self.calc_box.children:
-            if isinstance(child, Label) and child is not getattr(self,'calc_out',None):
-                child.text_size=(max(dp(100),child.width-dp(4)),None)
+            if hasattr(child,'text_size'): child.text_size=(max(dp(120),w-dp(20)),None)
+        if hasattr(self,'calc_grid'):
+            self._layout_calculator(w)
 
+    def toggle_fullscreen(self, _):
+        # Android: switch between normal and fullscreen so the usable area can be
+        # expanded without changing the trading logic. Rotation remains enabled.
+        Window.fullscreen = False if Window.fullscreen else 'auto'
+        Clock.schedule_once(lambda dt:self._on_window_resize(), .15)
+
+    def _layout_calculator(self, w):
+        grid=self.calc_grid
+        # Landscape: two compact columns; portrait: one column.
+        landscape=self.width >= self.height * 1.15
+        grid.clear_widgets()
+        fields=getattr(self,'_calc_fields',[])
+        if landscape and w >= dp(620):
+            grid.cols=2
+            grid.rows=(len(fields)+1)//2
+            grid.spacing=dp(7)
+            for name,widget in fields:
+                cell=BoxLayout(orientation='horizontal',spacing=dp(4),size_hint_y=None,height=dp(50))
+                lab=Label(text=name,size_hint_x=.52,halign='left',valign='middle',font_size='13sp')
+                lab.bind(size=lambda o,v:setattr(o,'text_size',(v[0],None)))
+                widget.size_hint_x=.48
+                cell.add_widget(lab); cell.add_widget(widget); grid.add_widget(cell)
+        else:
+            grid.cols=1
+            grid.rows=len(fields)
+            grid.spacing=dp(5)
+            for name,widget in fields:
+                row=BoxLayout(orientation='horizontal',spacing=dp(5),size_hint_y=None,height=dp(48))
+                lab=Label(text=name,size_hint_x=.46,halign='left',valign='middle',font_size='13sp')
+                lab.bind(size=lambda o,v:setattr(o,'text_size',(v[0],None)))
+                widget.size_hint_x=.54
+                row.add_widget(lab); row.add_widget(widget); grid.add_widget(row)
+        Clock.schedule_once(lambda dt:self.calc_box.setter('height')(self.calc_box,self.calc_box.minimum_height),0)
 
     def toggle(self,_):
         if self.actions.disabled:
@@ -77,19 +117,41 @@ class UI(BoxLayout):
 
     def refresh_symbols(self,_):
         def f():
-            items=self.engine.exchange.active_symbols(); values=tuple(x['display']+' ['+x['contract']+']' for x in items)
+            items=self.engine.exchange.active_symbols()
             def apply(_dt):
-                self._symbols=items; self.symbol_spinner.values=values or (self.engine.exchange.symbol,); current=self.engine.exchange.futures_symbol
-                for i,x in enumerate(items):
-                    if x['contract']==current:self.symbol_spinner.text=values[i]; break
-                self.info.text=f'KuCoin: найдено активных USDT-фьючерсов: {len(items)}\nВыбрано: {self.engine.exchange.symbol}'
+                self._symbols=items
+                self.info.text=f'KuCoin: найдено активных USDT-фьючерсов: {len(items)}\nВведите название монеты в поле поиска.'
+                self.filter_symbols(self.symbol_search,self.symbol_search.text)
             Clock.schedule_once(apply,0)
         threading.Thread(target=f,daemon=True).start()
-    def select_symbol(self,_,value):
-        if not hasattr(self,'_symbols'): return
+
+    def filter_symbols(self, _widget, value):
+        if not hasattr(self,'_symbols') or not hasattr(self,'symbol_results'): return
+        q=str(value or '').strip().upper().replace('-USDT','').replace('USDTM','')
+        rows=[]
         for x in self._symbols:
-            if value==x['display']+' ['+x['contract']+']':
-                self.engine.set_symbol(x['contract']); self.info.text=f'Выбрано: {x["display"]}\nМодель хранится отдельно для этого инструмента.'; return
+            display=x['display'].upper()
+            contract=x['contract'].upper()
+            base=str(x.get('base','')).upper()
+            if not q or q in display or q in contract or q in base:
+                rows.append(x)
+            if len(rows)>=20: break
+        self.symbol_results.clear_widgets()
+        if not rows:
+            self.symbol_results.height=0
+            return
+        for x in rows:
+            b=Button(text=f"{x['display']}  [{x['contract']}]",size_hint_y=None,height=dp(44))
+            b.bind(on_release=lambda btn,item=x:self.select_symbol(item))
+            self.symbol_results.add_widget(b)
+        self.symbol_results.height=len(rows)*dp(47)
+
+    def select_symbol(self,item):
+        self.engine.set_symbol(item['contract'])
+        self.symbol_search.text=item['display']
+        self.selected_label.text=f'Выбрано: {item["display"]} [{item["contract"]}]'
+        self.symbol_results.clear_widgets(); self.symbol_results.height=0
+        self.info.text=f'Выбрано: {item["display"]} [{item["contract"]}]\nМодель хранится отдельно для этого инструмента.'
 
     def train(self,_):
         self.worker(lambda:(lambda r:f"Обучение {self.engine.exchange.symbol} завершено.\nСтрок: {r['rows']}\nTrain: {r['train_rows']} | Test: {r['test_rows']}\nAccuracy: {r['accuracy']:.3f}\nBalanced: {r['balanced_accuracy']:.3f}\nМодель принята: {r['accepted']}")(self.engine.train_from_fresh()))
@@ -98,7 +160,11 @@ class UI(BoxLayout):
         def f(): return self.engine.predict_and_store()
         def done(r):
             if isinstance(r,str): self.show(r); return
-            self._last_prediction=r; self.show(self._prediction_text(r)); self.build_calculator(r)
+            self._detail_open=True
+            self._last_prediction=r
+            self.selected_label.text=f'Анализ: {r["symbol"]} [{r["exchange_symbol"]}]'
+            self.symbol_search.text=r.get('symbol',self.symbol_search.text)
+            self.show(self._prediction_text(r)); self.build_calculator(r)
         self.worker(f,done)
 
     def _prediction_text(self,r):
@@ -110,19 +176,28 @@ class UI(BoxLayout):
                      f"Горизонт: {r['horizon_bars']} x 5m\n\nСигнал сохранён для последующей проверки.")
 
     def scan(self,_):
-        self.results_box.clear_widgets(); self._scan_rows=[]; self._scan_seen=[]; self._scan_errors=0; self._scan_total=0
+        self._detail_open=False
+        self.results_box.clear_widgets(); self._scan_rows=[]; self._scan_seen=[]; self._scan_quick_ok=0; self._scan_errors=0; self._scan_total=0
         self.info.text='LIVE-СКАНЕР: получаю рынок KuCoin и начинаю предварительный анализ...\nНе закрывайте приложение.'
         def progress(done,total,name,row,err,phase='PRESCAN'):
             def apply(_dt):
+                if self._detail_open:
+                    return
                 if phase=='PRESCAN':
                     self._scan_total=total
-                    if err: self._scan_errors+=1
+                    if err:
+                        self._scan_errors+=1
+                    else:
+                        self._scan_quick_ok+=1
                     self.info.text=(f'ПРЕДСКАНИРОВАНИЕ: {done}/{total}\n'
-                                     f'Кандидатов: {len(self._scan_seen)} | Ошибок: {self._scan_errors}\n'
-                                     f'После анализа рынка будут обучены модели для лучших кандидатов.')
+                                     f'Свечи/кандидаты OK: {self._scan_quick_ok} | Ошибок: {self._scan_errors}\n'
+                                     f'Сейчас формируется пул лучших кандидатов. Выбранная монета не меняется.')
                 else:
-                    if err: self._scan_errors+=1
+                    if err:
+                        self._scan_errors+=1
                     if row:
+                        # Never allow one contract to occupy multiple TOP-5 slots.
+                        self._scan_seen=[x for x in self._scan_seen if x.get('contract')!=row.get('contract')]
                         self._scan_seen.append(row)
                         ranked=sorted(self._scan_seen,key=lambda r:(r.get('prediction')!='WAIT',r.get('edge_score',-9),r.get('quality',0),r.get('turnover24h',0)),reverse=True)[:5]
                         self._scan_rows=ranked
@@ -135,63 +210,75 @@ class UI(BoxLayout):
                                      f'Entry {r["entry"]:.6g}  SL {r["sl"]:.6g}  TP1 {r["tp1"]:.6g}')
                             b=Button(text=txt,size_hint_y=None,height=dp(82),halign='left',valign='middle')
                             b.bind(size=lambda o,v:setattr(o,'text_size',(max(dp(100),o.width-dp(20)),None)))
-                            b.bind(on_release=lambda btn,x=r:self.open_candidate(x)); self.results_box.add_widget(b)
-                    self.info.text=(f'ОБУЧЕНИЕ КАНДИДАТОВ: {done}/{total}\n'
-                                    f'Успешно: {len(self._scan_seen)} | Ошибок: {self._scan_errors}\n'
-                                    f'TOP-{min(5,len(self._scan_rows))} уже доступен выше.')
+                            b.bind(on_release=lambda btn,x=dict(r):self.open_candidate(x)); self.results_box.add_widget(b)
+                    self.info.text=(f'ПРОВЕРКА МОДЕЛЕЙ: {done}/{total}\n'
+                                    f'Кандидатов с реальными свечами: {self._scan_quick_ok} | Ошибок: {self._scan_errors}\n'
+                                    f'TOP-{min(5,len(self._scan_rows))} доступен выше. Можно нажать LIVE-ПРОГНОЗ выбранной монеты.')
             Clock.schedule_once(apply,0)
         def done(result):
+            if self._detail_open:
+                return
             if isinstance(result,str): self.show(result); return
             if not isinstance(result,tuple): self.show(str(result)); return
             rows,total,quick_count,errors=result
-            ranked=sorted(rows,key=lambda r:(r.get('prediction')!='WAIT',r.get('edge_score',-9),r.get('quality',0),r.get('turnover24h',0)),reverse=True)[:5]
-            self._scan_seen=rows; self._scan_rows=ranked
+            unique={}
+            for row in rows:
+                unique.setdefault(row.get('contract'),row)
+            ranked=sorted(unique.values(),key=lambda r:(r.get('prediction')!='WAIT',r.get('edge_score',-9),r.get('quality',0),r.get('turnover24h',0)),reverse=True)[:5]
+            self._scan_seen=list(unique.values()); self._scan_rows=ranked
             self.info.text=(f'LIVE-СКАНЕР ЗАВЕРШЁН\n'
-                            f'Рынок: {total} инструментов | Предсканировано: {quick_count} | Ошибок: {errors}\n'
-                            f'TOP-{len(ranked)} сформирован из лучших кандидатов.')
+                            f'Рынок: {total} инструментов | Реальные свечи: {quick_count} | Ошибок: {errors}\n'
+                            f'TOP-{len(ranked)} сформирован. Каждая монета в TOP-5 уникальна.')
         self.worker(lambda:self.engine.scan_all(progress=progress),done)
 
     def open_candidate(self,r):
-        self.engine.set_symbol(r['contract']); self._last_prediction=r; self.show(self._prediction_text(r)); self.build_calculator(r)
+        self._detail_open=True
+        self.engine.set_symbol(r['contract'])
+        self._last_prediction=dict(r)
+        self.symbol_search.text=r.get('symbol',self.symbol_search.text)
+        self.selected_label.text=f'Анализ: {r["symbol"]} [{r["exchange_symbol"]}]'
+        self.show(self._prediction_text(r)); self.build_calculator(r)
 
     def build_calculator(self,r):
         self.calc_box.clear_widgets()
-        title=Label(text='КАЛЬКУЛЯТОР ПОЗИЦИИ',font_size='18sp',size_hint_y=None,height=dp(38))
+        title=Label(text='КАЛЬКУЛЯТОР ПОЗИЦИИ',font_size='18sp',size_hint_y=None,height=dp(38),halign='left',valign='middle')
+        title.bind(size=lambda o,v:setattr(o,'text_size',(v[0],None)))
         self.calc_box.add_widget(title)
-        grid=BoxLayout(orientation='vertical',spacing=dp(5),size_hint_y=None)
+        grid=GridLayout(cols=1,spacing=dp(5),size_hint_y=None,padding=(0,0,0,dp(2)))
         grid.bind(minimum_height=grid.setter('height'))
-        def add(name,widget):
-            row=BoxLayout(orientation='horizontal',spacing=dp(5),size_hint_y=None,height=dp(48))
-            lab=Label(text=name,size_hint_x=.42,halign='left',valign='middle')
-            lab.bind(size=lambda o,v:setattr(o,'text_size',(v[0],None)))
-            widget.size_hint_x=.58
-            row.add_widget(lab); row.add_widget(widget); grid.add_widget(row)
-        self.direction=Spinner(text=r.get('prediction') if r.get('prediction') in ('LONG','SHORT') else 'LONG',values=('LONG','SHORT'),size_hint_y=None,height=dp(46)); add('Направление',self.direction)
-        self.leverage=Spinner(text='30',values=('1','2','3','5','10','20','30','50','75','100'),size_hint_y=None,height=dp(46)); add('Плечо x',self.leverage)
-        self.margin_mode=Spinner(text='ISOLATED',values=('ISOLATED','CROSS'),size_hint_y=None,height=dp(46)); add('Маржа',self.margin_mode)
-        self.balance=TextInput(text='100',input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('Полный баланс фьючерсов, USDT',self.balance)
-        self.margin=TextInput(text='5',input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('Маржа позиции, USDT',self.margin)
+        self.calc_grid=grid
+        def field(text, value='', filter_type='float'):
+            return TextInput(text=value,input_filter=filter_type,multiline=False,size_hint_y=None,height=dp(46),padding=(dp(8),dp(8)))
+        self.direction=Spinner(text=r.get('prediction') if r.get('prediction') in ('LONG','SHORT') else 'LONG',values=('LONG','SHORT'),size_hint_y=None,height=dp(46))
+        self.leverage=Spinner(text='30',values=('1','2','3','5','10','20','30','50','75','100'),size_hint_y=None,height=dp(46))
+        self.margin_mode=Spinner(text='ISOLATED',values=('ISOLATED','CROSS'),size_hint_y=None,height=dp(46))
+        self.balance=field('100')
+        self.margin=field('5')
         wait_mode=r.get('prediction')=='WAIT'
-        entry_default='' if wait_mode else f"{r.get('entry',0):.10g}"
-        self.entry=TextInput(text=entry_default,input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('Entry',self.entry)
-        self.sl=TextInput(text='' if wait_mode else f"{r.get('sl',0):.10g}",input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('SL',self.sl)
-        self.tp1=TextInput(text='' if wait_mode else f"{r.get('tp1',0):.10g}",input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('TP1',self.tp1)
-        self.tp2=TextInput(text='' if wait_mode else f"{r.get('tp2',r.get('tp1',0)):.10g}",input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('TP2',self.tp2)
-        self.tp3=TextInput(text='' if wait_mode else f"{r.get('tp3',r.get('tp1',0)):.10g}",input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('TP3',self.tp3)
-        self.mmr=TextInput(text='0.50',input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('MMR %, fallback',self.mmr)
-        self.liqfee=TextInput(text='0.06',input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('Liquidation fee %, fallback',self.liqfee)
-        self.fee=TextInput(text='0.06',input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('Taker fee %, fallback',self.fee)
+        self.entry=field('' if wait_mode else f"{r.get('entry',0):.10g}")
+        self.sl=field('' if wait_mode else f"{r.get('sl',0):.10g}")
+        self.tp1=field('' if wait_mode else f"{r.get('tp1',0):.10g}")
+        self.tp2=field('' if wait_mode else f"{r.get('tp2',r.get('tp1',0)):.10g}")
+        self.tp3=field('' if wait_mode else f"{r.get('tp3',r.get('tp1',0)):.10g}")
+        self.mmr=field('0.50')
+        self.liqfee=field('0.06')
+        self.fee=field('0.06')
+        self._calc_fields=[
+            ('Направление',self.direction),('Плечо x',self.leverage),('Маржа',self.margin_mode),
+            ('Полный баланс фьючерсов, USDT',self.balance),('Маржа позиции, USDT',self.margin),
+            ('Entry',self.entry),('SL',self.sl),('TP1',self.tp1),('TP2',self.tp2),('TP3',self.tp3),
+            ('MMR %, fallback',self.mmr),('Liquidation fee %, fallback',self.liqfee),('Taker fee %, fallback',self.fee)]
         self.calc_box.add_widget(grid)
         calc=Button(text='РАССЧИТАТЬ / ОБНОВИТЬ',size_hint_y=None,height=dp(56)); calc.bind(on_release=lambda *_:self.calculate(r)); self.calc_box.add_widget(calc)
         self.calc_out=Label(text='',font_size='15sp',halign='left',valign='top',size_hint_y=None)
-        self.calc_out.bind(width=lambda o,v:setattr(o,'text_size',(max(dp(100),v-dp(4)),None)))
+        self.calc_out.bind(width=lambda o,v:setattr(o,'text_size',(max(dp(100),v-dp(8)),None)))
         self.calc_out.bind(texture_size=lambda o,v:setattr(o,'height',max(dp(120),v[1]+dp(18))))
         self.calc_box.add_widget(self.calc_out)
         back=Button(text='← НАЗАД К TOP-5',size_hint_y=None,height=dp(52)); back.bind(on_release=lambda *_:self.back_to_top()); self.calc_box.add_widget(back)
         widgets=(self.direction,self.leverage,self.margin_mode,self.balance,self.margin,self.entry,self.sl,self.tp1,self.tp2,self.tp3,self.mmr,self.liqfee,self.fee)
         for w in widgets:
-            if isinstance(w,TextInput): w.bind(text=lambda *_:self.calculate(r))
-            else: w.bind(text=lambda *_:self.calculate(r))
+            w.bind(text=lambda *_:self.calculate(r))
+        self._layout_calculator(max(dp(260),self.width-dp(20)))
         self.calculate(r)
         Clock.schedule_once(lambda dt:self.scroll_to_calculator(),0.05)
 
@@ -244,7 +331,8 @@ class UI(BoxLayout):
             self.calc_out.text='Ошибка расчёта: '+str(e)
 
     def back_to_top(self):
-        self.calc_box.clear_widgets(); self.info.text='Выбери монету из TOP-5 выше.'; self.scroll.scroll_y=1
+        self._detail_open=False
+        self.calc_box.clear_widgets(); self.info.text='Выбери монету из TOP-5 выше или введи другую монету в поиск.'; self.scroll.scroll_y=1
 
     def learn(self,_):
         def f():

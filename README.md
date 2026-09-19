@@ -1,79 +1,16 @@
-# SelfLearningTrader Ultimate — Android / GitHub Ready
+# SelfLearningTrader Ultimate V12
 
-Полноценный исследовательский Android-проект для самообучающегося анализа крипторынка.
+Android-only paper-trading market scanner for KuCoin USDT perpetuals.
 
-## Принцип
+## V12 fixes
+- Correct KuCoin Futures candle parsing: `[time, open, high, low, close, volume, turnover]`.
+- TOP-5 contains unique contracts only; one contract cannot occupy multiple slots.
+- Scanner uses an isolated exchange/engine and never changes the user's selected coin.
+- Scanner progress distinguishes real-candle candidates from request errors.
+- Selected coin is explicitly shown in the UI; opening a TOP-5 candidate synchronizes the search/selection header.
+- Manual coin search remains available for the full active-contract list.
+- WAIT does not create a trading plan.
+- Calculator and Cross/Isolated paper calculations retained.
+- Portrait and landscape build configuration retained.
 
-**История → признаки → обучение → walk-forward → live-прогноз → ожидание результата → оценка ошибки → новый опыт → переобучение → новая версия модели.**
-
-Система не открывает реальные позиции. Она предназначена для backtest / paper-trading / исследования.
-
-## Что сразу заложено
-
-- 5m / 15m / 1H / 4H / 1D;
-- RSI, EMA, MACD, ATR, Bollinger;
-- доходности, диапазоны, волатильность, объём и volume z-score;
-- multi-timeframe context;
-- текущий order-book imbalance;
-- текущие market/futures metrics через адаптеры, когда API их предоставляет;
-- LONG / SHORT / WAIT;
-- вероятности классов;
-- confidence и quality flags;
-- журнал прогнозов;
-- pending predictions: прогноз сохраняется до наступления горизонта;
-- автоматическое присвоение фактического результата;
-- experience memory;
-- регулярное переобучение;
-- walk-forward evaluation;
-- champion/challenger: новая модель заменяет текущую только если проходит заданный критерий;
-- версии моделей;
-- paper-trading журнал;
-- локальное хранение данных на Android;
-- GitHub Actions для APK.
-
-## Ограничения данных
-
-Программа **не придумывает исторический стакан, OI, funding или ликвидации**. Для каждого источника есть признак доступности. Текущий live-показатель может быть доступен, даже если исторического архива нет.
-
-Это важно для честного backtest: нельзя использовать информацию, которой в тот момент исторически не было.
-
-## GitHub → APK
-
-1. Создайте пустой репозиторий.
-2. Загрузите содержимое этого архива в корень.
-3. Откройте **Actions**.
-4. Запустите **Build Android APK**.
-5. Скачайте artifact `SelfLearningTrader-debug-apk`.
-6. Установите APK на телефон.
-
-Workflow сначала проверяет Python-код, затем собирает APK.
-
-## Первый запуск
-
-Нажмите:
-**СИНХРОНИЗИРОВАТЬ И ОБУЧИТЬ**
-
-После обучения:
-**LIVE-ПРОГНОЗ**
-
-Для непрерывного накопления опыта используйте:
-**ЦИКЛ САМООБУЧЕНИЯ**
-
-Android может ограничивать бесконечную фоновую работу. Поэтому v1 делает надёжный foreground/manual cycle. Архитектура позволяет позже добавить foreground service или серверный collector.
-
-## Важное
-
-Никакая модель не может гарантировать 100% правильных прогнозов рынка. Проект специально построен так, чтобы измерять качество на невидимых данных и не выдавать backtest как гарантию будущего результата.
-
-
-Build V4: ARM64, Kivy 2.3.1, direct robust source adjustments in the local p4a recipe, no fragile patch hunks.
-
-
-## SSL / Android
-The HTTP client explicitly uses the bundled certifi CA bundle because Android Python builds can otherwise fail with CERTIFICATE_VERIFY_FAILED. Certificate verification remains enabled.
-## Position calculator
-The calculator supports LONG/SHORT, leverage, Cross/Isolated, account balance, position margin, Entry/SL/TP, MMR, liquidation fee and taker fee. Liquidation is shown as a KuCoin reference calculation, not a guarantee.
-
-
-## V6 scanner
-TOP-5 is updated progressively while the full active USDT-perpetual list is scanned. The screen shows processed/ok/error counters and clickable candidates as soon as real predictions are available.
+KuCoin's documented Futures Kline format is `[time, open, high, low, close, volume, turnover]`; the previous build incorrectly treated the high field as close, which could distort indicators and model outputs.

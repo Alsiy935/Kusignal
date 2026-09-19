@@ -29,7 +29,17 @@ class KuCoin:
         s=str(symbol).strip().upper()
         if not s:
             s='XBTUSDTM'
-        self.futures_symbol=s if s.endswith('M') else s.replace('-USDT','USDTM')
+        # KuCoin Futures uses XBTUSDTM as the BTC perpetual contract symbol.
+        # The UI/config uses the human-readable BTC-USDT name, so normalize
+        # both directions here. Without this mapping BTC-USDT became
+        # BTCUSDTM, which is not a valid KuCoin Futures contract and caused
+        # empty 5m candle responses.
+        if s in ('BTC-USDT','BTCUSDT','BTCUSDTM'):
+            self.futures_symbol='XBTUSDTM'
+        elif s.endswith('USDTM'):
+            self.futures_symbol=s
+        else:
+            self.futures_symbol=s.replace('-USDT','USDTM')
         self.symbol=self.display_symbol(self.futures_symbol)
 
     @staticmethod
@@ -136,9 +146,12 @@ class KuCoin:
         rows={int(r[0]):r for r in chunks}; rows=sorted(rows.values(),key=lambda r:int(r[0]))[-limit:]
         if not rows: raise RuntimeError(f'KuCoin не вернул свечи {tf} для {self.futures_symbol}')
         a=np.asarray(rows,dtype=object)
-        # KuCoin Futures kline format: [time, open, close, high, low, volume, turnover]
-        return {'time':a[:,0].astype(np.int64)*1000,'open':a[:,1].astype(float),'close':a[:,2].astype(float),
-                'high':a[:,3].astype(float),'low':a[:,4].astype(float),'volume':a[:,5].astype(float),
+        # KuCoin Futures REST format is [time, open, high, low, close, volume, turnover].
+        # The previous build incorrectly treated the HIGH field as CLOSE, which could
+        # distort RSI/MACD/ATR and produce absurd 100% predictions.
+        return {'time':a[:,0].astype(np.int64)*1000,'open':a[:,1].astype(float),
+                'high':a[:,2].astype(float),'low':a[:,3].astype(float),
+                'close':a[:,4].astype(float),'volume':a[:,5].astype(float),
                 'turnover':a[:,6].astype(float) if a.shape[1]>6 else np.zeros(len(a))}
 
     def orderbook_imbalance(self):
