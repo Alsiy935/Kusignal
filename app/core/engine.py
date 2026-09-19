@@ -60,7 +60,9 @@ class LearningEngine:
         price=float(row['close'][0]); atr=float(row['atrpct'][0])*price; atr=max(atr,price*0.001)
         if pred=='LONG': return price,price-1.2*atr,price+1.8*atr,price+2.7*atr,price+3.6*atr
         if pred=='SHORT': return price,price+1.2*atr,price-1.8*atr,price-2.7*atr,price-3.6*atr
-        return price,price-1.0*atr,price,price,price
+        # WAIT deliberately has no trading plan. Keep only the reference market price;
+        # UI/calculator must not turn WAIT into an accidental LONG/SHORT order.
+        return price,float('nan'),float('nan'),float('nan'),float('nan')
     def predict_and_store(self):
         row=self.live_row(); pred,probs=self.mm.predict(row); entry,sl,tp1,tp2,tp3=self._signal_levels(row,pred); ts=int(row['time'][0]); item={'id':str(int(time.time()*1000)),'symbol':self.exchange.symbol,'exchange_symbol':self.exchange.futures_symbol,'contract':self.exchange.futures_symbol,'time':ts,'price':float(row['close'][0]),'prediction':pred,'p_short':probs[0],'p_wait':probs[1],'p_long':probs[2],'entry':entry,'sl':sl,'tp1':tp1,'tp2':tp2,'tp3':tp3,'horizon_bars':int(self.cfg['horizon_bars']),'resolved':0}
         item['features']={f:float(row[f][0]) for f in FEATURES}; self._append_json(self.predictions,item); self._append_json(self.pending,item); return item
@@ -116,24 +118,75 @@ class LearningEngine:
     def learning_cycle(self):
         resolved=self.resolve_pending(); trained=self.train_from_fresh(); return resolved,trained,self.stats()
 
+    def _quick_candidate(self, item):
+        # Lightweight market-wide pre-scan: one recent 5m window per contract.
+        # This avoids training hundreds of separate models before ranking the market.
+        self.set_symbol(item['contract'])
+        bars=self.exchange.candles('5min',240)
+        x=add_features(bars); i=len(x['time'])-1
+        if i<40: raise ValueError('слишком мало 5m свечей')
+        close=float(x['close'][i]); rsi=float(x['rsi'][i]); trend=float(x['trend'][i]);
+        macd=float(x['macd'][i]); volz=float(x['volz'][i]); atr=float(x['atrpct'][i]);
+        # Directional technical score, deliberately bounded to [-1,1].
+        score=(0.30*np.tanh(trend*120.0)+0.25*np.tanh(macd*120.0)+
+               0.20*np.clip((rsi-50.0)/25.0,-1,1)+0.15*np.tanh(volz/2.0)+
+               0.10*np.tanh((float(x['ret3'][i]) if np.isfinite(x['ret3'][i]) else 0.0)*80.0))
+        score=float(np.clip(score,-1,1))
+        # Liquidity is a ranking factor, not a directional signal.
+        liq=float(item.get('turnover',0.0) or 0.0)
+        quality=float(np.clip(abs(score)*0.75 + min(1.0,np.log10(max(liq,1.0))/10.0)*0.25,0,1))
+        return {'contract':item['contract'],'symbol':item['display'],'price':close,'quick_score':score,
+                'quality':quality,'turnover24h':liq,'atrpct':atr,'rsi':rsi}
+
+    def _scan_train_and_predict(self,item,scan_history=800):
+        # Full model validation only for the best pre-scan candidates.
+        old_limit=self.cfg.get('history_limit',5000)
+        try:
+            self.cfg['history_limit']=max(500,int(scan_history))
+            self.set_symbol(item['contract'])
+            if not self.mm.has_champion():
+                self.train_from_fresh()
+            row=self.live_row(); pred,probs=self.mm.predict(row)
+            entry,sl,tp1,tp2,tp3=self._signal_levels(row,pred)
+            r={'id':str(int(time.time()*1000)),'symbol':self.exchange.symbol,'exchange_symbol':self.exchange.futures_symbol,
+               'contract':self.exchange.futures_symbol,'time':int(row['time'][0]),'price':float(row['close'][0]),
+               'prediction':pred,'p_short':probs[0],'p_wait':probs[1],'p_long':probs[2],
+               'entry':entry,'sl':sl,'tp1':tp1,'tp2':tp2,'tp3':tp3,'horizon_bars':int(self.cfg['horizon_bars']),'resolved':0,
+               'turnover24h':float(item.get('turnover',0.0) or 0.0)}
+            r['quality']=float(max(probs.values()))
+            r['edge_score']=float(max(probs[0],probs[2])-probs[1])
+            r['features']={f:float(row[f][0]) for f in FEATURES}
+            self._append_json(self.predictions,r); self._append_json(self.pending,r)
+            return r
+        finally:
+            self.cfg['history_limit']=old_limit
+
     def scan_all(self, progress=None):
-        symbols=self.exchange.active_symbols(); results=[]
-        original=self.exchange.futures_symbol
+        symbols=self.exchange.active_symbols(); original=self.exchange.futures_symbol
+        quick=[]; errors=0; total=len(symbols)
+        # Phase 1: inspect the whole market cheaply.
         for i,item in enumerate(symbols):
             try:
-                self.set_symbol(item['contract'])
-                if not self.mm.has_champion():
-                    train=self.train_from_fresh()
-                else:
-                    train=None
-                resolved=self.resolve_pending()
-                r=self.predict_and_store()
-                r['contract']=item['contract']
-                r['trained_now']=bool(train)
-                r['resolved_now']=resolved
-                results.append(r)
+                q=self._quick_candidate(item); quick.append(q)
+                if progress: progress(i+1,total,item['display'],q,None,phase='PRESCAN')
             except Exception as e:
-                results.append({'symbol':item['display'],'contract':item['contract'],'error':str(e)})
-            if progress: progress(i+1,len(symbols),item['display'])
+                errors+=1
+                if progress: progress(i+1,total,item['display'],None,{'error':str(e)},phase='PRESCAN')
+        # Keep a wider finalist set so the final TOP-5 is not dominated by one metric.
+        quick.sort(key=lambda r:(r['quality'],abs(r['quick_score']),r['turnover24h']),reverse=True)
+        finalists=quick[:12]
+        results=[]
+        for j,item in enumerate(finalists):
+            try:
+                r=self._scan_train_and_predict({'contract':item['contract'],'display':item['symbol'],'turnover':item['turnover24h']},800)
+                r['quick_score']=item['quick_score']; r['prescan_quality']=item['quality']; r['scan_index']=j+1
+                results.append(r)
+                if progress: progress(j+1,len(finalists),item['symbol'],r,None,phase='MODEL')
+            except Exception as e:
+                errors+=1
+                if progress: progress(j+1,len(finalists),item['symbol'],None,{'error':str(e)},phase='MODEL')
         self.set_symbol(original)
-        return results
+        # Rank by directional edge, model confidence and liquidity, while keeping WAIT below trade candidates.
+        results.sort(key=lambda r:(r.get('prediction')!='WAIT',r.get('edge_score',-9),r.get('quality',0),r.get('turnover24h',0)),reverse=True)
+        return results, total, len(quick), errors
+

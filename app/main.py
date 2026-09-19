@@ -14,6 +14,7 @@ from kivy.core.window import Window
 from core.config import load
 from core.exchange import KuCoin
 from core.engine import LearningEngine
+from core.calculator import calculate_position
 
 class UI(BoxLayout):
     def __init__(self,engine,**kw):
@@ -28,15 +29,33 @@ class UI(BoxLayout):
         refresh=Button(text='↻',size_hint_x=None,width=dp(52)); refresh.bind(on_release=self.refresh_symbols); selector.add_widget(refresh); self.add_widget(selector)
         self.scroll=ScrollView(do_scroll_x=False); self.content=BoxLayout(orientation='vertical',size_hint_y=None,spacing=dp(6)); self.content.bind(minimum_height=self.content.setter('height')); self.scroll.add_widget(self.content); self.add_widget(self.scroll)
         self.info=Label(text='Загрузка списка монет...',font_size='16sp',halign='left',valign='top',size_hint_y=None)
+        self.info.bind(width=lambda o,v:setattr(o,'text_size',(max(dp(100),v-dp(4)),None)))
         self.info.bind(texture_size=lambda o,v:setattr(o,'height',max(dp(120),v[1]+dp(20)))); self.content.add_widget(self.info)
         self.actions=BoxLayout(orientation='vertical',spacing=dp(6),size_hint_y=None,height=0,opacity=0); self.actions.disabled=True
         buttons=[('ОБУЧИТЬ ВЫБРАННУЮ',self.train),('LIVE-ПРОГНОЗ ВЫБРАННОЙ',self.predict),('СКАНИРОВАТЬ KUCOIN → TOP-5',self.scan),('ЦИКЛ САМООБУЧЕНИЯ',self.learn),('ПРОВЕРИТЬ СТАРЫЕ ПРОГНОЗЫ',self.resolve)]
         for text,fn in buttons:
             b=Button(text=text,size_hint_y=None,height=dp(58)); b.bind(on_release=fn); self.actions.add_widget(b)
         self.content.add_widget(self.actions)
-        self.results_box=BoxLayout(orientation='vertical',spacing=dp(5),size_hint_y=None); self.results_box.bind(minimum_height=self.results_box.setter('height')); self.content.add_widget(self.results_box)
-        self.calc_box=BoxLayout(orientation='vertical',spacing=dp(5),size_hint_y=None); self.content.add_widget(self.calc_box)
+        self.results_box=BoxLayout(orientation='vertical',spacing=dp(5),size_hint_y=None,width=self.scroll.width); self.results_box.bind(width=lambda o,v:setattr(o,'size_hint_x',None)); self.results_box.bind(minimum_height=self.results_box.setter('height')); self.content.add_widget(self.results_box)
+        self.calc_box=BoxLayout(orientation='vertical',spacing=dp(5),size_hint_y=None,width=self.scroll.width); self.calc_box.bind(width=lambda o,v:setattr(o,'size_hint_x',None)); self.calc_box.bind(minimum_height=self.calc_box.setter('height')); self.content.add_widget(self.calc_box)
+        Window.bind(size=self._on_window_resize)
+        Clock.schedule_once(lambda dt:self._on_window_resize(),.1)
         Clock.schedule_once(lambda dt:self.refresh_symbols(None),.2)
+
+    def _on_window_resize(self, *args):
+        # Keep every text block readable in both portrait and landscape.
+        w=max(dp(220), self.width-dp(24))
+        self.content.width=w
+        self.info.width=w
+        self.results_box.width=w
+        self.calc_box.width=w
+        for child in self.results_box.children:
+            child.width=w
+            if hasattr(child,'text_size'): child.text_size=(w-dp(20),None)
+        for child in self.calc_box.children:
+            if isinstance(child, Label) and child is not getattr(self,'calc_out',None):
+                child.text_size=(max(dp(100),child.width-dp(4)),None)
+
 
     def toggle(self,_):
         if self.actions.disabled:
@@ -83,100 +102,146 @@ class UI(BoxLayout):
         self.worker(f,done)
 
     def _prediction_text(self,r):
-        return (f"{r['symbol']} [{r['exchange_symbol']}]\nПРОГНОЗ: {r['prediction']}\n"
-                f"Вероятности: SHORT {r['p_short']:.1%} | WAIT {r['p_wait']:.1%} | LONG {r['p_long']:.1%}\n\n"
-                f"Рыночная зона входа: {r['entry']:.6g}\nБазовый SL: {r['sl']:.6g}\nTP1: {r['tp1']:.6g}\nTP2: {r['tp2']:.6g}\nTP3: {r['tp3']:.6g}\n"
-                f"Горизонт: {r['horizon_bars']} x 5m\n\nСигнал сохранён для последующей проверки.")
+        base=(f"{r['symbol']} [{r['exchange_symbol']}]\nПРОГНОЗ: {r['prediction']}\n"
+              f"Вероятности: SHORT {r['p_short']:.1%} | WAIT {r['p_wait']:.1%} | LONG {r['p_long']:.1%}\n")
+        if r['prediction']=='WAIT':
+            return base+"\nТОРГОВЫЙ ВХОД НЕ ФОРМИРУЕТСЯ: модель выбрала WAIT.\n"+f"Горизонт: {r['horizon_bars']} x 5m\n\nСигнал сохранён для последующей проверки."
+        return base+(f"\nРыночная зона входа: {r['entry']:.6g}\nБазовый SL: {r['sl']:.6g}\nTP1: {r['tp1']:.6g}\nTP2: {r['tp2']:.6g}\nTP3: {r['tp3']:.6g}\n"
+                     f"Горизонт: {r['horizon_bars']} x 5m\n\nСигнал сохранён для последующей проверки.")
 
     def scan(self,_):
-        def f(): return self.engine.scan_all()
-        def done(rows):
-            self.results_box.clear_widgets(); self._scan_rows=[]
-            if isinstance(rows,str): self.show(rows); return
-            good=[r for r in rows if 'error' not in r]
-            good.sort(key=lambda r:max(r['p_short'],r['p_long']),reverse=True); good=good[:5]; self._scan_rows=good
-            self.info.text=f'LIVE-СКАНЕР: выбраны TOP-{len(good)} кандидатов из {len(rows)} инструментов. Нажми на монету для глубокого анализа.'
-            for r in good:
-                b=Button(text=f"{r['symbol']}  |  {r['prediction']}  |  {max(r['p_short'],r['p_long']):.0%}\nEntry {r['entry']:.6g}  SL {r['sl']:.6g}  TP1 {r['tp1']:.6g}",size_hint_y=None,height=dp(72))
-                b.bind(on_release=lambda btn,x=r:self.open_candidate(x)); self.results_box.add_widget(b)
-        self.worker(f,done)
+        self.results_box.clear_widgets(); self._scan_rows=[]; self._scan_seen=[]; self._scan_errors=0; self._scan_total=0
+        self.info.text='LIVE-СКАНЕР: получаю рынок KuCoin и начинаю предварительный анализ...\nНе закрывайте приложение.'
+        def progress(done,total,name,row,err,phase='PRESCAN'):
+            def apply(_dt):
+                if phase=='PRESCAN':
+                    self._scan_total=total
+                    if err: self._scan_errors+=1
+                    self.info.text=(f'ПРЕДСКАНИРОВАНИЕ: {done}/{total}\n'
+                                     f'Кандидатов: {len(self._scan_seen)} | Ошибок: {self._scan_errors}\n'
+                                     f'После анализа рынка будут обучены модели для лучших кандидатов.')
+                else:
+                    if err: self._scan_errors+=1
+                    if row:
+                        self._scan_seen.append(row)
+                        ranked=sorted(self._scan_seen,key=lambda r:(r.get('prediction')!='WAIT',r.get('edge_score',-9),r.get('quality',0),r.get('turnover24h',0)),reverse=True)[:5]
+                        self._scan_rows=ranked
+                        self.results_box.clear_widgets()
+                        for rank,r in enumerate(ranked,1):
+                            if r['prediction']=='WAIT':
+                                txt=f'#{rank}  {r["symbol"]} | WAIT {r["p_wait"]:.0%}\nНет торгового входа'
+                            else:
+                                txt=(f'#{rank}  {r["symbol"]} | {r["prediction"]} | {max(r["p_short"],r["p_long"]):.0%}\n'
+                                     f'Entry {r["entry"]:.6g}  SL {r["sl"]:.6g}  TP1 {r["tp1"]:.6g}')
+                            b=Button(text=txt,size_hint_y=None,height=dp(82),halign='left',valign='middle')
+                            b.bind(size=lambda o,v:setattr(o,'text_size',(max(dp(100),o.width-dp(20)),None)))
+                            b.bind(on_release=lambda btn,x=r:self.open_candidate(x)); self.results_box.add_widget(b)
+                    self.info.text=(f'ОБУЧЕНИЕ КАНДИДАТОВ: {done}/{total}\n'
+                                    f'Успешно: {len(self._scan_seen)} | Ошибок: {self._scan_errors}\n'
+                                    f'TOP-{min(5,len(self._scan_rows))} уже доступен выше.')
+            Clock.schedule_once(apply,0)
+        def done(result):
+            if isinstance(result,str): self.show(result); return
+            if not isinstance(result,tuple): self.show(str(result)); return
+            rows,total,quick_count,errors=result
+            ranked=sorted(rows,key=lambda r:(r.get('prediction')!='WAIT',r.get('edge_score',-9),r.get('quality',0),r.get('turnover24h',0)),reverse=True)[:5]
+            self._scan_seen=rows; self._scan_rows=ranked
+            self.info.text=(f'LIVE-СКАНЕР ЗАВЕРШЁН\n'
+                            f'Рынок: {total} инструментов | Предсканировано: {quick_count} | Ошибок: {errors}\n'
+                            f'TOP-{len(ranked)} сформирован из лучших кандидатов.')
+        self.worker(lambda:self.engine.scan_all(progress=progress),done)
 
     def open_candidate(self,r):
         self.engine.set_symbol(r['contract']); self._last_prediction=r; self.show(self._prediction_text(r)); self.build_calculator(r)
 
     def build_calculator(self,r):
         self.calc_box.clear_widgets()
-        title=Label(text='КАЛЬКУЛЯТОР ПОЗИЦИИ',font_size='18sp',size_hint_y=None,height=dp(34)); self.calc_box.add_widget(title)
-        grid=GridLayout(cols=2,spacing=dp(4),size_hint_y=None); grid.bind(minimum_height=grid.setter('height'))
-        def add(name,widget): grid.add_widget(Label(text=name,size_hint_y=None,height=dp(42),halign='left')); grid.add_widget(widget)
-        self.leverage=Spinner(text='30',values=('1','2','3','5','10','20','30','50','75','100'),size_hint_y=None,height=dp(42)); add('Плечо x',self.leverage)
-        self.margin_mode=Spinner(text='ISOLATED',values=('ISOLATED','CROSS'),size_hint_y=None,height=dp(42)); add('Маржа',self.margin_mode)
-        self.balance=TextInput(text='100',input_filter='float',multiline=False,size_hint_y=None,height=dp(42)); add('Баланс фьючерсов, USDT',self.balance)
-        self.margin=TextInput(text='5',input_filter='float',multiline=False,size_hint_y=None,height=dp(42)); add('Маржа позиции, USDT',self.margin)
-        self.entry=TextInput(text=f"{r['entry']:.10g}",input_filter='float',multiline=False,size_hint_y=None,height=dp(42)); add('Entry',self.entry)
-        self.sl=TextInput(text=f"{r['sl']:.10g}",input_filter='float',multiline=False,size_hint_y=None,height=dp(42)); add('SL',self.sl)
-        self.tp=TextInput(text=f"{r['tp1']:.10g}",input_filter='float',multiline=False,size_hint_y=None,height=dp(42)); add('TP1',self.tp)
-        self.mmr=TextInput(text='0.50',input_filter='float',multiline=False,size_hint_y=None,height=dp(42)); add('MMR %, для расчёта',self.mmr)
-        self.liqfee=TextInput(text='0.06',input_filter='float',multiline=False,size_hint_y=None,height=dp(42)); add('Liquidation fee %, для расчёта',self.liqfee)
-        self.fee=TextInput(text='0.06',input_filter='float',multiline=False,size_hint_y=None,height=dp(42)); add('Taker fee %, для расчёта',self.fee)
+        title=Label(text='КАЛЬКУЛЯТОР ПОЗИЦИИ',font_size='18sp',size_hint_y=None,height=dp(38))
+        self.calc_box.add_widget(title)
+        grid=BoxLayout(orientation='vertical',spacing=dp(5),size_hint_y=None)
+        grid.bind(minimum_height=grid.setter('height'))
+        def add(name,widget):
+            row=BoxLayout(orientation='horizontal',spacing=dp(5),size_hint_y=None,height=dp(48))
+            lab=Label(text=name,size_hint_x=.42,halign='left',valign='middle')
+            lab.bind(size=lambda o,v:setattr(o,'text_size',(v[0],None)))
+            widget.size_hint_x=.58
+            row.add_widget(lab); row.add_widget(widget); grid.add_widget(row)
+        self.direction=Spinner(text=r.get('prediction') if r.get('prediction') in ('LONG','SHORT') else 'LONG',values=('LONG','SHORT'),size_hint_y=None,height=dp(46)); add('Направление',self.direction)
+        self.leverage=Spinner(text='30',values=('1','2','3','5','10','20','30','50','75','100'),size_hint_y=None,height=dp(46)); add('Плечо x',self.leverage)
+        self.margin_mode=Spinner(text='ISOLATED',values=('ISOLATED','CROSS'),size_hint_y=None,height=dp(46)); add('Маржа',self.margin_mode)
+        self.balance=TextInput(text='100',input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('Полный баланс фьючерсов, USDT',self.balance)
+        self.margin=TextInput(text='5',input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('Маржа позиции, USDT',self.margin)
+        wait_mode=r.get('prediction')=='WAIT'
+        entry_default='' if wait_mode else f"{r.get('entry',0):.10g}"
+        self.entry=TextInput(text=entry_default,input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('Entry',self.entry)
+        self.sl=TextInput(text='' if wait_mode else f"{r.get('sl',0):.10g}",input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('SL',self.sl)
+        self.tp1=TextInput(text='' if wait_mode else f"{r.get('tp1',0):.10g}",input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('TP1',self.tp1)
+        self.tp2=TextInput(text='' if wait_mode else f"{r.get('tp2',r.get('tp1',0)):.10g}",input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('TP2',self.tp2)
+        self.tp3=TextInput(text='' if wait_mode else f"{r.get('tp3',r.get('tp1',0)):.10g}",input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('TP3',self.tp3)
+        self.mmr=TextInput(text='0.50',input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('MMR %, fallback',self.mmr)
+        self.liqfee=TextInput(text='0.06',input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('Liquidation fee %, fallback',self.liqfee)
+        self.fee=TextInput(text='0.06',input_filter='float',multiline=False,size_hint_y=None,height=dp(46)); add('Taker fee %, fallback',self.fee)
         self.calc_box.add_widget(grid)
-        calc=Button(text='РАССЧИТАТЬ',size_hint_y=None,height=dp(54)); calc.bind(on_release=lambda *_:self.calculate(r)); self.calc_box.add_widget(calc)
-        self.calc_out=Label(text='',font_size='15sp',halign='left',valign='top',size_hint_y=None); self.calc_out.bind(texture_size=lambda o,v:setattr(o,'height',v[1]+dp(16))); self.calc_box.add_widget(self.calc_out)
-        back=Button(text='← НАЗАД К TOP-5',size_hint_y=None,height=dp(48)); back.bind(on_release=lambda *_:self.back_to_top()); self.calc_box.add_widget(back)
+        calc=Button(text='РАССЧИТАТЬ / ОБНОВИТЬ',size_hint_y=None,height=dp(56)); calc.bind(on_release=lambda *_:self.calculate(r)); self.calc_box.add_widget(calc)
+        self.calc_out=Label(text='',font_size='15sp',halign='left',valign='top',size_hint_y=None)
+        self.calc_out.bind(width=lambda o,v:setattr(o,'text_size',(max(dp(100),v-dp(4)),None)))
+        self.calc_out.bind(texture_size=lambda o,v:setattr(o,'height',max(dp(120),v[1]+dp(18))))
+        self.calc_box.add_widget(self.calc_out)
+        back=Button(text='← НАЗАД К TOP-5',size_hint_y=None,height=dp(52)); back.bind(on_release=lambda *_:self.back_to_top()); self.calc_box.add_widget(back)
+        widgets=(self.direction,self.leverage,self.margin_mode,self.balance,self.margin,self.entry,self.sl,self.tp1,self.tp2,self.tp3,self.mmr,self.liqfee,self.fee)
+        for w in widgets:
+            if isinstance(w,TextInput): w.bind(text=lambda *_:self.calculate(r))
+            else: w.bind(text=lambda *_:self.calculate(r))
         self.calculate(r)
+        Clock.schedule_once(lambda dt:self.scroll_to_calculator(),0.05)
+
+    def scroll_to_calculator(self):
+        self.scroll.scroll_y=0
 
     def calculate(self,r):
         try:
+            if r.get('prediction')=='WAIT' and not self.entry.text.strip():
+                self.calc_out.text=('МОДЕЛЬ: WAIT — торговый план не сформирован.\n\n'
+                                    'Калькулятор не подставляет фиктивные Entry/SL/TP.\n'
+                                    'Если хочешь проверить гипотетическую сделку, выбери LONG/SHORT и введи Entry, SL и TP1–TP3.')
+                return
+            direction=self.direction.text.upper()
             lev=float(self.leverage.text); bal=float(self.balance.text); margin=float(self.margin.text)
-            entry=float(self.entry.text); sl=float(self.sl.text); tp=float(self.tp.text)
+            entry=float(self.entry.text); sl=float(self.sl.text); tp1=float(self.tp1.text)
+            tp2=float(self.tp2.text); tp3=float(self.tp3.text)
             mmr=float(self.mmr.text)/100; liq_fee=float(self.liqfee.text)/100; taker=float(self.fee.text)/100
-            if min(lev,bal,margin,entry)<=0: raise ValueError('параметры должны быть больше нуля')
-            direction=r.get('prediction','LONG').upper()
-            if direction not in ('LONG','SHORT'): direction='LONG'
-            notional=margin*lev
-            qty=notional/entry
-            side=1 if direction=='LONG' else -1
-            pnl_sl=(sl-entry)*qty*side
-            pnl_tp=(tp-entry)*qty*side
-            open_fee=notional*taker
-            close_fee=abs(qty*tp)*taker
-            net_sl=pnl_sl-open_fee-(abs(qty*sl)*taker)
-            net_tp=pnl_tp-open_fee-close_fee
-            rr=(abs(pnl_tp)/abs(pnl_sl)) if pnl_sl else 0.0
-
-            # KuCoin USDT-margined linear-contract reference formulas.
-            # Isolated: position margin is the only position collateral.
-            if direction=='LONG':
-                liq_iso=(notional-margin)/(qty*(1-mmr-liq_fee))
-            else:
-                liq_iso=(notional+margin)/(qty*(1+mmr+liq_fee))
-
-            # Cross: with one modeled position, AMR = total cross margin / abs(mark value).
-            # This is a reference price; actual liquidation is account-risk based.
-            amr=bal/notional if notional else 0.0
-            mark_value=side*notional
-            denom=1-side*mmr-side*taker
-            liq_cross=((mark_value-abs(mark_value)*amr)/denom)/(side*qty) if abs(denom)>1e-12 else None
-            liq=liq_iso if self.margin_mode.text=='ISOLATED' else liq_cross
-            liq_text='нет' if liq is None or liq<=0 else f'{liq:.10g}'
-            dist_sl=abs(entry-sl)/entry if entry else 0
-            dist_liq=abs(entry-liq)/entry if liq and liq>0 else 0
-            risk_share=margin/bal if bal else 0
-            self.calc_out.text=(
-                f"Направление: {direction}\nНоминал позиции: {notional:.6f} USDT\nКоличество: {qty:.10g}\n"
-                f"Маржа: {margin:.6f} USDT | Баланс: {bal:.6f} USDT | x{lev:g}\n\n"
-                f"Entry: {entry:.10g}\nSL: {sl:.10g}  ({dist_sl:.2%} от Entry)\nTP1: {tp:.10g}\n\n"
-                f"Убыток до SL: {pnl_sl:.6f} USDT\nПрибыль до TP1: {pnl_tp:.6f} USDT\n"
-                f"После ориентировочных taker-комиссий: SL {net_sl:.6f} USDT | TP1 {net_tp:.6f} USDT\n"
-                f"R/R: 1:{rr:.2f}\n\n"
-                f"Ликвидация ({self.margin_mode.text}): {liq_text}\n"
-                f"Запас Entry → Liquidation: {dist_liq:.2%}\n"
-                f"Маржа / баланс: {risk_share:.2%}\n"
-                f"MMR: {mmr:.3%} | liquidation fee: {liq_fee:.3%} | taker fee: {taker:.3%}\n\n"
-                "Для Cross это справочная цена: фактическая ликвидация зависит от риска всего аккаунта, других позиций и ордеров.\n"
-                "Для точного значения перед сделкой нужно сверять параметры конкретного контракта и Mark Price KuCoin."
-            )
-        except Exception as e: self.calc_out.text='Ошибка расчёта: '+str(e)
+            if direction=='LONG' and not (sl<entry<tp1<=tp2<=tp3): raise ValueError('LONG: SL < Entry < TP1 ≤ TP2 ≤ TP3')
+            if direction=='SHORT' and not (sl>entry>tp1>=tp2>=tp3): raise ValueError('SHORT: SL > Entry > TP1 ≥ TP2 ≥ TP3')
+            info=self.engine.exchange.contract_info()
+            def rate(name,fallback):
+                v=info.get(name)
+                if v is None:return fallback
+                try:return float(v)
+                except:return fallback
+            multiplier=rate('multiplier',1.0)
+            api_mmr=rate('maintainMargin',mmr*100)/100
+            api_fee=rate('takerFeeRate',taker*100)/100
+            # Some KuCoin payloads expose rates already as decimals; normalize only if needed.
+            if api_mmr>1: api_mmr/=100
+            if api_fee>1: api_fee/=100
+            mmr=api_mmr if api_mmr>0 else mmr; taker=api_fee if api_fee>=0 else taker
+            c=calculate_position(entry,margin,lev,multiplier,direction,mmr,taker,liq_fee,bal,self.margin_mode.text,sl,tp1,tp2,tp3)
+            liq=c['liquidation']; liq_txt=f'{liq:.10g}' if liq is not None and liq>0 else 'нет положительной оценки'
+            dist='—' if c['liq_distance_pct'] is None else f"{c['liq_distance_pct']:.2%}"
+            amr='—' if c['amr'] is None else f"{c['amr']:.2%}"
+            cross_note=('Cross: это справочная цена. Реальная ликвидация KuCoin определяется account risk ratio и Mark Price; '
+                        'при других Cross-позициях/ордерах результат изменится.') if self.margin_mode.text=='CROSS' else 'Isolated: расчёт по формуле KuCoin для USDT-M; MMR и liquidation fee зависят от risk tier.'
+            self.calc_out.text=(f"Направление: {direction}\nКонтракт: {info.get('symbol',self.engine.exchange.futures_symbol)} | multiplier: {multiplier:g}\n"
+                f"Номинал: {c['notional']:.6f} USDT | Контрактов: {c['qty']:.10g}\n"
+                f"Маржа позиции: {margin:.6f} | Полный баланс: {bal:.6f} | x{lev:g} | {self.margin_mode.text}\n"
+                f"Открывающая комиссия: {c['opening_fee']:.6f} USDT\n\n"
+                f"Entry: {entry:.10g}\nSL: {sl:.10g}\nTP1: {tp1:.10g} | TP2: {tp2:.10g} | TP3: {tp3:.10g}\n\n"
+                f"P/L SL после комиссий: {c['pnl_sl']:.6f} USDT\nP/L TP1 после комиссий: {c['pnl_tp1']:.6f} USDT\nP/L TP2 после комиссий: {c['pnl_tp2']:.6f} USDT\nP/L TP3 после комиссий: {c['pnl_tp3']:.6f} USDT\n"
+                f"R/R до TP1: 1:{c['rr']:.2f}\n\n"
+                f"Ликвидация (расчёт): {liq_txt}\nЗапас Entry → Liquidation: {dist}\nAMR Cross: {amr}\n"
+                f"MMR: {mmr:.3%} | taker: {taker:.3%} | liquidation fee: {liq_fee:.3%}\n{cross_note}")
+        except Exception as e:
+            self.calc_out.text='Ошибка расчёта: '+str(e)
 
     def back_to_top(self):
         self.calc_box.clear_widgets(); self.info.text='Выбери монету из TOP-5 выше.'; self.scroll.scroll_y=1
