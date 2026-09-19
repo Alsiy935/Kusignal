@@ -1,3 +1,4 @@
+from kivy.uix.widget import Widget
 import threading
 from pathlib import Path
 from kivy.app import App
@@ -18,54 +19,131 @@ from core.calculator import calculate_position
 
 class UI(BoxLayout):
     def __init__(self,engine,**kw):
-        super().__init__(orientation='vertical',padding=(dp(12),dp(10)),spacing=dp(6),**kw)
-        self.engine=engine; self._last_prediction=None; self._scan_rows=[]; self._detail_open=False; self._ui_scale=1.0; Window.fullscreen=False
-        header=BoxLayout(size_hint_y=None,height=dp(52))
-        self.title=Label(text='SelfLearningTrader Ultimate',font_size='18sp'); header.add_widget(self.title)
-        self.menu=Button(text='...',size_hint_x=None,width=dp(52)); self.menu.bind(on_release=self.toggle); header.add_widget(self.menu); self.fullscreen_btn=Button(text='⛶',size_hint_x=None,width=dp(52)); self.fullscreen_btn.bind(on_release=self.toggle_fullscreen); header.add_widget(self.fullscreen_btn); self.add_widget(header)
-        selector=BoxLayout(size_hint_y=None,height=dp(52),spacing=dp(6))
-        self.symbol_search=TextInput(text='',hint_text='Поиск монеты: BTC, ETH, SOL...',multiline=False,size_hint_x=.72)
-        self.symbol_search.bind(text=self.filter_symbols)
-        selector.add_widget(self.symbol_search)
-        refresh=Button(text='↻',size_hint_x=None,width=dp(52)); refresh.bind(on_release=self.refresh_symbols); selector.add_widget(refresh); self.add_widget(selector)
-        self.selected_label=Label(text='Выбрано: —',font_size='14sp',halign='left',valign='middle',size_hint_y=None,height=dp(30))
-        self.selected_label.bind(size=lambda o,v:setattr(o,'text_size',(max(dp(100),v[0]-dp(4)),None)))
-        self.add_widget(self.selected_label)
-        self.scroll=ScrollView(do_scroll_x=True, do_scroll_y=True, bar_width=dp(5), scroll_timeout=250); self.content=BoxLayout(orientation='vertical',size_hint_y=None,size_hint_x=None,spacing=dp(6)); self.content.bind(minimum_height=self.content.setter('height')); self.scroll.add_widget(self.content); self.add_widget(self.scroll)
-        self.symbol_results=BoxLayout(orientation='vertical',spacing=dp(3),size_hint_y=None,height=0)
-        self.symbol_results.bind(minimum_height=self.symbol_results.setter('height'))
-        self.content.add_widget(self.symbol_results)
-        self.info=Label(text='Загрузка списка монет...',font_size='16sp',halign='left',valign='top',size_hint_y=None)
-        self.info.bind(width=lambda o,v:setattr(o,'text_size',(max(dp(100),v-dp(4)),None)))
-        self.info.bind(texture_size=lambda o,v:setattr(o,'height',max(dp(120),v[1]+dp(20)))); self.content.add_widget(self.info)
+        super().__init__(orientation='vertical', padding=(dp(12),dp(8)), spacing=dp(6), **kw)
+        self.engine=engine
+        self._last_prediction=None; self._scan_rows=[]; self._detail_open=False; self._ui_scale=1.0
+        self._symbols=[]; self._nav_mode='scanner'; self._log_open=False
+        Window.fullscreen=False
+        self._bg=(0.035,0.045,0.055,1); self._panel=(0.075,0.095,0.115,1); self._panel2=(0.10,0.125,0.15,1); self._accent=(0.03,0.55,1,1); self._text=(0.93,0.95,0.98,1)
+
+        def style_button(b, accent=False):
+            b.background_normal=''; b.background_down=''; b.background_color=self._accent if accent else self._panel2
+            b.color=self._text; b.font_size='14sp'; b.border=(dp(1),dp(1),dp(1),dp(1));
+            return b
+
+        # Header: hamburger | title/subtitle | fullscreen | menu
+        header=BoxLayout(size_hint_y=None,height=dp(62),spacing=dp(6))
+        hamburger=style_button(Button(text='☰',size_hint_x=None,width=dp(50)),False); hamburger.bind(on_release=lambda *_: self.toggle_menu_panel())
+        header.add_widget(hamburger)
+        titles=BoxLayout(orientation='vertical',padding=(dp(4),dp(1)),spacing=0)
+        self.title=Label(text='SelfLearningTrader Ultimate - V13',font_size='18sp',halign='left',valign='middle',color=self._text)
+        self.title.bind(size=lambda o,v:setattr(o,'text_size',(v[0],None)))
+        self.subtitle=Label(text='Сканер | Анализ | Прогноз | Самообучение',font_size='11sp',halign='left',valign='middle',color=(.62,.68,.75,1))
+        self.subtitle.bind(size=lambda o,v:setattr(o,'text_size',(v[0],None)))
+        titles.add_widget(self.title); titles.add_widget(self.subtitle); header.add_widget(titles)
+        self.fullscreen_btn=style_button(Button(text='⛶',size_hint_x=None,width=dp(58)),False); self.fullscreen_btn.bind(on_release=self.toggle_fullscreen); header.add_widget(self.fullscreen_btn)
+        self.menu=style_button(Button(text='⋮',size_hint_x=None,width=dp(58)),False); self.menu.bind(on_release=self.toggle); header.add_widget(self.menu)
+        self._header=header; self.add_widget(header)
+
+        # Search row
+        selector=BoxLayout(size_hint_y=None,height=dp(48),spacing=dp(6))
+        self.symbol_search=TextInput(text='',hint_text='Поиск монеты: BTC, ETH, SOL...',multiline=False,size_hint_x=1,font_size='16sp',padding=(dp(10),dp(10)),background_color=(.92,.92,.94,1),foreground_color=(.08,.08,.1,1),hint_text_color=(.35,.38,.42,1))
+        self.symbol_search.bind(text=self.filter_symbols); selector.add_widget(self.symbol_search)
+        refresh=style_button(Button(text='↻',size_hint_x=None,width=dp(58)),False); refresh.bind(on_release=self.refresh_symbols); selector.add_widget(refresh); self.add_widget(selector)
+
+        # Filter chips
+        chips=BoxLayout(size_hint_y=None,height=dp(40),spacing=dp(5))
+        for txt,mode in [('Все','all'),('Избранные','fav'),('USDT-M','usdt'),('Только активные','active')]:
+            b=style_button(Button(text=txt,size_hint_x=1), txt=='Все'); b.bind(on_release=lambda _,m=mode:self.set_filter(m)); chips.add_widget(b)
+        self.add_widget(chips)
+
+        self.selected_label=Label(text='Выбрано: —',font_size='14sp',halign='left',valign='middle',color=self._text,size_hint_y=None,height=dp(28))
+        self.selected_label.bind(size=lambda o,v:setattr(o,'text_size',(max(dp(100),v[0]-dp(4)),None))); self.add_widget(self.selected_label)
+
+        # Main scrolling area. It is the only scrollable region; header and bottom nav stay fixed.
+        self.scroll=ScrollView(do_scroll_x=False,do_scroll_y=True,bar_width=dp(5),scroll_timeout=250)
+        self.content=BoxLayout(orientation='vertical',size_hint_y=None,size_hint_x=1,spacing=dp(6),padding=(0,0,0,dp(10)))
+        self.content.bind(minimum_height=self.content.setter('height')); self.scroll.add_widget(self.content); self.add_widget(self.scroll)
+        self.symbol_results=BoxLayout(orientation='vertical',spacing=dp(4),size_hint_y=None,height=0); self.symbol_results.bind(minimum_height=self.symbol_results.setter('height')); self.content.add_widget(self.symbol_results)
+
+        self.info=Label(text='Загрузка списка монет...',font_size='14sp',halign='left',valign='top',size_hint_y=None,color=self._text,padding=(dp(12),dp(10)))
+        self.info.bind(width=lambda o,v:setattr(o,'text_size',(max(dp(100),v-dp(20)),None))); self.info.bind(texture_size=lambda o,v:setattr(o,'height',max(dp(115),v[1]+dp(20))))
+        self.info.bind(pos=self._update_card_rect,size=self._update_card_rect)
+        from kivy.graphics import Color, RoundedRectangle
+        with self.info.canvas.before:
+            Color(*self._panel); self._info_rect=RoundedRectangle(pos=self.info.pos,size=self.info.size,radius=[dp(10)])
+        self.content.add_widget(self.info)
+
         self.actions=BoxLayout(orientation='vertical',spacing=dp(6),size_hint_y=None,height=0,opacity=0); self.actions.disabled=True
         buttons=[('ОБУЧИТЬ ВЫБРАННУЮ',self.train),('LIVE-ПРОГНОЗ ВЫБРАННОЙ',self.predict),('СКАНИРОВАТЬ KUCOIN → TOP-5',self.scan),('ЦИКЛ САМООБУЧЕНИЯ',self.learn),('ПРОВЕРИТЬ СТАРЫЕ ПРОГНОЗЫ',self.resolve)]
         for text,fn in buttons:
-            b=Button(text=text,size_hint_y=None,height=dp(58)); b.bind(on_release=fn); self.actions.add_widget(b)
+            b=style_button(Button(text=text,size_hint_y=None,height=dp(50)),False); b.bind(on_release=fn); self.actions.add_widget(b)
         self.content.add_widget(self.actions)
-        self.results_box=BoxLayout(orientation='vertical',spacing=dp(5),size_hint_y=None,width=self.scroll.width); self.results_box.bind(width=lambda o,v:setattr(o,'size_hint_x',None)); self.results_box.bind(minimum_height=self.results_box.setter('height')); self.content.add_widget(self.results_box)
-        self.calc_box=BoxLayout(orientation='vertical',spacing=dp(5),size_hint_y=None,width=self.scroll.width); self.calc_box.bind(width=lambda o,v:setattr(o,'size_hint_x',None)); self.calc_box.bind(minimum_height=self.calc_box.setter('height')); self.content.add_widget(self.calc_box)
+
+        self.results_box=BoxLayout(orientation='vertical',spacing=dp(5),size_hint_y=None,width=1); self.results_box.bind(minimum_height=self.results_box.setter('height')); self.content.add_widget(self.results_box)
+        self.calc_box=BoxLayout(orientation='vertical',spacing=dp(5),size_hint_y=None,width=1); self.calc_box.bind(minimum_height=self.calc_box.setter('height')); self.content.add_widget(self.calc_box)
+
+        # Stop / scan button
+        self.stop_btn=style_button(Button(text='■   Стоп',size_hint_y=None,height=dp(54)),True); self.stop_btn.bind(on_release=self.stop_scan); self.content.add_widget(self.stop_btn)
+
+        # Collapsible log area
+        self.log_btn=style_button(Button(text='▤   Лог (последние события)                 ˅',size_hint_y=None,height=dp(50)),False); self.log_btn.bind(on_release=self.toggle_log); self.content.add_widget(self.log_btn)
+        self.log_box=Label(text='Лог пока пуст.',font_size='13sp',halign='left',valign='top',color=(.72,.76,.82,1),size_hint_y=None,height=0,opacity=0,padding=(dp(10),dp(8)))
+        self.log_box.bind(width=lambda o,v:setattr(o,'text_size',(max(dp(100),v-dp(18)),None))); self.content.add_widget(self.log_box)
+
+        # Fixed bottom navigation
+        nav=BoxLayout(size_hint_y=None,height=dp(64),spacing=dp(2),padding=(0,dp(3)))
+        for txt,mode in [('⌗\nСканер','scanner'),('▥\nАнализ','analysis'),('♙\nМодель','model'),('⚙\nНастройки','settings')]:
+            b=style_button(Button(text=txt,font_size='12sp'), mode=='scanner'); b.bind(on_release=lambda _,m=mode:self.bottom_nav(m)); nav.add_widget(b)
+        self.add_widget(nav)
+
         Window.bind(size=self._on_window_resize)
         Clock.schedule_once(lambda dt:self._on_window_resize(),.1)
         Clock.schedule_once(lambda dt:self.refresh_symbols(None),.2)
 
+    def _update_card_rect(self, *args):
+        try: self._info_rect.pos=self.info.pos; self._info_rect.size=self.info.size
+        except Exception: pass
+
+    def set_filter(self,mode):
+        self._filter_mode=mode; self.filter_symbols(self.symbol_search,self.symbol_search.text)
+
+    def toggle_menu_panel(self):
+        self.toggle(self.menu)
+
+    def toggle_log(self,*_):
+        self._log_open=not self._log_open
+        if self._log_open:
+            self.log_box.opacity=1; self.log_box.height=dp(110); self.log_btn.text='▤   Лог (последние события)                 ˄'
+        else:
+            self.log_box.opacity=0; self.log_box.height=0; self.log_btn.text='▤   Лог (последние события)                 ˅'
+
+    def bottom_nav(self,mode):
+        self._nav_mode=mode
+        if mode=='scanner': self.scroll.scroll_y=1; return
+        if mode=='analysis':
+            if self._last_prediction: self.show(self._prediction_text(self._last_prediction)); self.scroll.scroll_y=0
+            else: self.show('Анализ: сначала выбери монету и запусти LIVE-ПРОГНОЗ.'); self.scroll.scroll_y=0
+        elif mode=='model':
+            self.show('Модель: для выбранной монеты доступны обучение, LIVE-прогноз и цикл самообучения через меню ☰/⋮.')
+            self.scroll.scroll_y=0
+        elif mode=='settings':
+            self.show('Настройки: управление действиями и параметрами калькулятора доступно через верхнее меню и выбранную монету.')
+            self.scroll.scroll_y=0
+
+    def stop_scan(self,*_):
+        self.show('Запрошена остановка текущего сканирования. Уже завершённые результаты сохранены.'); self._detail_open=False
+
     def _on_window_resize(self, *args):
-        # Responsive layout: never clip the calculator on narrow Android screens.
-        w=max(dp(260), self.width-dp(20))
-        self.content.width=w
-        self.info.width=w
-        self.results_box.width=w
-        self.calc_box.width=w
-        self.symbol_results.width=w
+        w=max(dp(240), self.scroll.width-dp(2))
+        self.content.width=w; self.info.width=w; self.results_box.width=w; self.calc_box.width=w; self.symbol_results.width=w
+        self.scroll.do_scroll_x=False
         for child in self.results_box.children:
             child.width=w
             if hasattr(child,'text_size'): child.text_size=(max(dp(120),w-dp(20)),None)
-        if hasattr(self,'calc_grid'):
-            self._layout_calculator(w)
+        if hasattr(self,'calc_grid'): self._layout_calculator(w)
 
     def toggle_fullscreen(self, _):
-        # Android: switch between normal and fullscreen so the usable area can be
-        # expanded without changing the trading logic. Rotation remains enabled.
         Window.fullscreen = False if Window.fullscreen else 'auto'
         Clock.schedule_once(lambda dt:self._on_window_resize(), .15)
 
@@ -99,9 +177,9 @@ class UI(BoxLayout):
 
     def toggle(self,_):
         if self.actions.disabled:
-            self.actions.disabled=False; self.actions.opacity=1; self.actions.height=len(self.actions.children)*64; self.menu.text='X'
+            self.actions.disabled=False; self.actions.opacity=1; self.actions.height=len(self.actions.children)*56; self.menu.text='×'
         else:
-            self.actions.disabled=True; self.actions.opacity=0; self.actions.height=0; self.menu.text='...'
+            self.actions.disabled=True; self.actions.opacity=0; self.actions.height=0; self.menu.text='⋮'
 
     def worker(self,fn,on_done=None):
         self.info.text='Работаю...\nНе закрывайте приложение.'
@@ -141,7 +219,7 @@ class UI(BoxLayout):
             self.symbol_results.height=0
             return
         for x in rows:
-            b=Button(text=f"{x['display']}  [{x['contract']}]",size_hint_y=None,height=dp(44))
+            b=Button(text=f"{x['display']}  [{x['contract']}]    ☆",size_hint_y=None,height=dp(50),background_normal='',background_down='',background_color=self._panel2,color=self._text,font_size='15sp')
             b.bind(on_release=lambda btn,item=x:self.select_symbol(item))
             self.symbol_results.add_widget(b)
         self.symbol_results.height=len(rows)*dp(47)
@@ -208,7 +286,7 @@ class UI(BoxLayout):
                             else:
                                 txt=(f'#{rank}  {r["symbol"]} | {r["prediction"]} | {max(r["p_short"],r["p_long"]):.0%}\n'
                                      f'Entry {r["entry"]:.6g}  SL {r["sl"]:.6g}  TP1 {r["tp1"]:.6g}')
-                            b=Button(text=txt,size_hint_y=None,height=dp(82),halign='left',valign='middle')
+                            b=Button(text=txt,size_hint_y=None,height=dp(78),halign='left',valign='middle',background_normal='',background_down='',background_color=self._panel2,color=self._text,font_size='14sp')
                             b.bind(size=lambda o,v:setattr(o,'text_size',(max(dp(100),o.width-dp(20)),None)))
                             b.bind(on_release=lambda btn,x=dict(r):self.open_candidate(x)); self.results_box.add_widget(b)
                     self.info.text=(f'ПРОВЕРКА МОДЕЛЕЙ: {done}/{total}\n'
@@ -244,7 +322,7 @@ class UI(BoxLayout):
         title=Label(text='КАЛЬКУЛЯТОР ПОЗИЦИИ',font_size='18sp',size_hint_y=None,height=dp(38),halign='left',valign='middle')
         title.bind(size=lambda o,v:setattr(o,'text_size',(v[0],None)))
         self.calc_box.add_widget(title)
-        grid=GridLayout(cols=1,spacing=dp(5),size_hint_y=None,padding=(0,0,0,dp(2)))
+        grid=GridLayout(cols=1,spacing=dp(5),size_hint_y=None,size_hint_x=1,padding=(0,0,0,dp(2)))
         grid.bind(minimum_height=grid.setter('height'))
         self.calc_grid=grid
         def field(text, value='', filter_type='float'):
@@ -278,12 +356,13 @@ class UI(BoxLayout):
         widgets=(self.direction,self.leverage,self.margin_mode,self.balance,self.margin,self.entry,self.sl,self.tp1,self.tp2,self.tp3,self.mmr,self.liqfee,self.fee)
         for w in widgets:
             w.bind(text=lambda *_:self.calculate(r))
-        self._layout_calculator(max(dp(260),self.width-dp(20)))
+        self._layout_calculator(max(dp(240),self.scroll.width-dp(4)))
         self.calculate(r)
         Clock.schedule_once(lambda dt:self.scroll_to_calculator(),0.05)
 
     def scroll_to_calculator(self):
         self.scroll.scroll_y=0
+        self.scroll.do_scroll_x=False
 
     def calculate(self,r):
         try:
