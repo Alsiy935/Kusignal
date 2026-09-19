@@ -6,7 +6,7 @@ source.dir = app
 source.include_exts = py,json,csv,md
 version = 1.0.0
 requirements = python3,kivy==2.3.1,numpy,certifi
-orientation = all
+orientation = portrait,landscape
 fullscreen = 0
 android.api = 34
 android.minapi = 24
